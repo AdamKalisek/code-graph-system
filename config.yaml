@@ -1,0 +1,38 @@
+neo4j:
+  uri: bolt://localhost:7688
+  username: neo4j
+  password: password123
+
+plugins:
+  enabled:
+    - php-language
+    - javascript-language
+    - espocrm-system
+  
+  directories:
+    - ./plugins
+    - ~/.cgs/plugins
+
+analysis:
+  parallel_workers: 8
+  batch_size: 1000
+  stream_chunk_size: 100
+  
+  exclude:
+    - "vendor/"
+    - "node_modules/"
+    - ".git/"
+    - "cache/"
+    - "*.test.php"
+    - "*.spec.js"
+
+federation:
+  mode: unified  # or 'per-language'
+  cross_language_linking: on-demand
+  
+security:
+  plugin_sandboxing: false  # Set to true for production
+  resource_limits:
+    memory_mb: 512
+    cpu_percent: 50
+    timeout_seconds: 30
