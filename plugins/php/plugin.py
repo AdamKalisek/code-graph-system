@@ -23,6 +23,7 @@ from code_graph_system.core.schema import (
     CoreNode, Symbol, Relationship, File,
     SourceLocation, Visibility
 )
+from plugins.php.ast_parser_simple import SimplePHPParser
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class PHPLanguagePlugin(ILanguagePlugin):
     def __init__(self):
         self.config = {}
         self.parser_script = Path(__file__).parent / 'parser.php'
+        self.ast_parser = SimplePHPParser()
         
     def get_metadata(self) -> PluginMetadata:
         """Return plugin metadata"""
@@ -142,107 +144,9 @@ class PHPLanguagePlugin(ILanguagePlugin):
         }
         
     def parse_file(self, file_path: str) -> ParseResult:
-        """Parse a PHP file and return results"""
-        nodes = []
-        relationships = []
-        errors = []
-        warnings = []
-        
-        try:
-            # Calculate file hash
-            with open(file_path, 'rb') as f:
-                content = f.read()
-                file_hash = hashlib.sha256(content).hexdigest()
-                
-            # Create file node
-            file_node = File(
-                path=file_path,
-                language='php',
-                hash=file_hash,
-                size=len(content)
-            )
-            nodes.append(file_node)
-            
-            # Call PHP parser
-            if self.parser_script.exists():
-                result = subprocess.run(
-                    ['php', str(self.parser_script), file_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                
-                if result.returncode != 0:
-                    errors.append(f"Parser error: {result.stderr}")
-                else:
-                    # Parse JSON output
-                    try:
-                        parser_output = json.loads(result.stdout)
-                        
-                        # Process classes
-                        for class_data in parser_output.get('classes', []):
-                            class_node = self._create_class_node(class_data, file_path)
-                            nodes.append(class_node)
-                            
-                            # Create relationships
-                            if class_data.get('extends'):
-                                rel = Relationship(
-                                    type='EXTENDS',
-                                    source_id=class_node.id,
-                                    target_id=None,  # Will be resolved later
-                                    metadata={'target_name': class_data['extends']}
-                                )
-                                relationships.append(rel)
-                                
-                            for interface in class_data.get('implements', []):
-                                rel = Relationship(
-                                    type='IMPLEMENTS_INTERFACE',
-                                    source_id=class_node.id,
-                                    target_id=None,  # Will be resolved later
-                                    metadata={'target_name': interface}
-                                )
-                                relationships.append(rel)
-                                
-                            # Process methods
-                            for method_data in class_data.get('methods', []):
-                                method_node = self._create_method_node(method_data, class_data)
-                                nodes.append(method_node)
-                                
-                                rel = Relationship(
-                                    type='HAS_METHOD',
-                                    source_id=class_node.id,
-                                    target_id=method_node.id
-                                )
-                                relationships.append(rel)
-                                
-                            # Process properties
-                            for prop_data in class_data.get('properties', []):
-                                prop_node = self._create_property_node(prop_data, class_data)
-                                nodes.append(prop_node)
-                                
-                                rel = Relationship(
-                                    type='HAS_PROPERTY',
-                                    source_id=class_node.id,
-                                    target_id=prop_node.id
-                                )
-                                relationships.append(rel)
-                                
-                    except json.JSONDecodeError as e:
-                        errors.append(f"Failed to parse parser output: {e}")
-            else:
-                # Fallback to basic regex parsing if parser script not available
-                nodes.extend(self._basic_parse(file_path))
-                
-        except Exception as e:
-            errors.append(f"Parse error: {str(e)}")
-            
-        return ParseResult(
-            file_path=file_path,
-            nodes=nodes,
-            relationships=relationships,
-            errors=errors,
-            warnings=warnings
-        )
+        """Parse a PHP file and return results using AST parser"""
+        # Use the new AST parser directly
+        return self.ast_parser.parse_file(file_path)
         
     def stream_parse(self, file_path: str) -> Iterator[ParseResult]:
         """Stream parse results for large files"""

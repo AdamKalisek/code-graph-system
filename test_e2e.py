@@ -135,7 +135,7 @@ def test_php_parsing(plugins, graph_store):
                 # Parse the file
                 result = php_plugin.parse_file(file_path)
                 
-                if result.success:
+                if len(result.errors) == 0:
                     # Store in graph
                     n, r = graph_store.store_batch(
                         result.nodes,
@@ -192,7 +192,7 @@ def test_javascript_parsing(plugins, graph_store):
                 # Parse the file
                 result = js_plugin.parse_file(file_path)
                 
-                if result.success:
+                if len(result.errors) == 0:
                     # Store in graph
                     n, r = graph_store.store_batch(
                         result.nodes,
@@ -236,7 +236,7 @@ def test_espocrm_analysis(plugins, graph_store):
         # Analyze EspoCRM project
         result = espo_plugin.analyze('espocrm')
         
-        if result.success:
+        if len(result.errors) == 0:
             # Store in graph
             n, r = graph_store.store_batch(
                 result.nodes,

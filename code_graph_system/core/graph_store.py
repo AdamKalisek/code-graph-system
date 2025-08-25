@@ -116,7 +116,7 @@ class FederatedGraphStore:
     
     def store_nodes(self, nodes: List[CoreNode], language: str = None) -> int:
         """
-        Store nodes in the graph.
+        Store nodes in the graph using bulk ingestion with UNWIND.
         
         Args:
             nodes: List of nodes to store
@@ -128,35 +128,40 @@ class FederatedGraphStore:
         if not nodes:
             return 0
             
-        # Convert nodes to dictionaries
-        node_data = []
+        # Group nodes by type for efficient bulk operations
+        nodes_by_type = {}
         for node in nodes:
             data = node.to_dict()
             # Add language tag if using unified mode
             if self.federation_mode == 'unified' and language:
                 data['_language'] = language
-            node_data.append(data)
             
-        # Batch create nodes
+            node_type = data.get('type', 'Node')
+            if node_type not in nodes_by_type:
+                nodes_by_type[node_type] = []
+            
+            # Flatten properties for Neo4j
+            flattened_props = self._flatten_dict(data)
+            nodes_by_type[node_type].append(flattened_props)
+        
+        # Bulk create nodes using UNWIND
+        total_created = 0
         try:
-            # Create nodes with their specific labels
-            for node_dict in node_data:
-                node_type = node_dict.get('type', 'Node')
-                
-                # Flatten the properties for Neo4j storage
-                flattened_props = self._flatten_dict(node_dict)
-                
-                # Create Cypher query
+            for node_type, node_list in nodes_by_type.items():
+                # Use UNWIND for bulk operations (100-1000x faster)
                 query = f"""
-                    MERGE (n:{node_type} {{id: $id}})
-                    SET n += $properties
-                    RETURN n
+                    UNWIND $nodes AS node_data
+                    MERGE (n:{node_type} {{id: node_data.id}})
+                    SET n += node_data
+                    RETURN count(n) as created
                 """
                 
-                self.graph.run(query, id=node_dict['id'], properties=flattened_props)
-                
-            logger.info(f"Stored {len(nodes)} nodes")
-            return len(nodes)
+                result = self.graph.run(query, nodes=node_list).data()
+                if result:
+                    total_created += result[0].get('created', 0)
+                    
+            logger.info(f"Stored {total_created} nodes using bulk ingestion")
+            return total_created
             
         except Exception as e:
             logger.error(f"Failed to store nodes: {e}")
@@ -164,7 +169,7 @@ class FederatedGraphStore:
             
     def store_relationships(self, relationships: List[Relationship]) -> int:
         """
-        Store relationships in the graph.
+        Store relationships in the graph using bulk ingestion with UNWIND.
         
         Args:
             relationships: List of relationships to store
@@ -175,41 +180,50 @@ class FederatedGraphStore:
         if not relationships:
             return 0
             
-        count = 0
+        # Group relationships by type for efficient bulk operations
+        rels_by_type = {}
         for rel in relationships:
+            rel_type = rel.type
+            if rel_type not in rels_by_type:
+                rels_by_type[rel_type] = []
+            
+            properties = rel.to_dict()
+            properties.pop('source_id', None)
+            properties.pop('target_id', None)
+            properties.pop('type', None)
+            
+            # Flatten the properties for Neo4j storage
+            flattened_props = self._flatten_dict(properties)
+            
+            rels_by_type[rel_type].append({
+                'source_id': str(rel.source_id),
+                'target_id': str(rel.target_id),
+                'properties': flattened_props
+            })
+        
+        # Bulk create relationships using UNWIND
+        total_created = 0
+        for rel_type, rel_list in rels_by_type.items():
             try:
-                # Create relationship
+                # Use UNWIND for bulk operations (100-1000x faster)
                 query = f"""
-                    MATCH (a {{id: $source_id}})
-                    MATCH (b {{id: $target_id}})
-                    MERGE (a)-[r:{rel.type}]->(b)
-                    SET r += $properties
-                    RETURN r
+                    UNWIND $rels AS rel_data
+                    MATCH (a {{id: rel_data.source_id}})
+                    MATCH (b {{id: rel_data.target_id}})
+                    MERGE (a)-[r:{rel_type}]->(b)
+                    SET r += rel_data.properties
+                    RETURN count(r) as created
                 """
                 
-                properties = rel.to_dict()
-                properties.pop('source_id', None)
-                properties.pop('target_id', None)
-                properties.pop('type', None)
-                
-                # Flatten the properties for Neo4j storage
-                flattened_props = self._flatten_dict(properties)
-                
-                result = self.graph.run(
-                    query,
-                    source_id=str(rel.source_id),
-                    target_id=str(rel.target_id),
-                    properties=flattened_props
-                )
-                
+                result = self.graph.run(query, rels=rel_list).data()
                 if result:
-                    count += 1
+                    total_created += result[0].get('created', 0)
                     
             except Exception as e:
-                logger.warning(f"Failed to create relationship {rel.type}: {e}")
+                logger.warning(f"Failed to create {rel_type} relationships: {e}")
                 
-        logger.info(f"Stored {count} relationships")
-        return count
+        logger.info(f"Stored {total_created} relationships using bulk ingestion")
+        return total_created
         
     def store_batch(self, nodes: List[CoreNode], relationships: List[Relationship], 
                    language: str = None) -> Tuple[int, int]:
