@@ -24,6 +24,7 @@ from code_graph_system.core.schema import (
     SourceLocation, Visibility
 )
 from plugins.php.ast_parser_simple import SimplePHPParser
+from plugins.php.nikic_parser import NikicPHPParser
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,13 @@ class PHPLanguagePlugin(ILanguagePlugin):
     def __init__(self):
         self.config = {}
         self.parser_script = Path(__file__).parent / 'parser.php'
-        self.ast_parser = SimplePHPParser()
+        # Try to use Nikic parser, fall back to simple parser if not available
+        try:
+            self.ast_parser = NikicPHPParser()
+            logger.info("Using NikicPHPParser (AST-based)")
+        except Exception as e:
+            logger.warning(f"NikicPHPParser not available: {e}, falling back to SimplePHPParser")
+            self.ast_parser = SimplePHPParser()
         
     def get_metadata(self) -> PluginMetadata:
         """Return plugin metadata"""

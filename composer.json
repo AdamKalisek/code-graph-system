@@ -1,0 +1,7 @@
+{
+    "name": "code-graph/php-parser",
+    "type": "project",
+    "require": {
+        "nikic/php-parser": "^5.6"
+    }
+}

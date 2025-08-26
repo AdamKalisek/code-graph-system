@@ -119,6 +119,38 @@ class Symbol(CoreNode):
     def __post_init__(self):
         self.type = NodeType.SYMBOL.value
         
+    def get_labels(self) -> List[str]:
+        """Return list of Neo4j labels for this symbol"""
+        labels = ['Symbol']
+        
+        # Add language label if available
+        if hasattr(self, '_language') and self._language:
+            labels.append(self._language.upper())
+        elif self.metadata and '_language' in self.metadata:
+            labels.append(self.metadata['_language'].upper())
+            
+        # Add kind-specific label
+        if self.kind:
+            kind_label_map = {
+                'class': 'Class',
+                'method': 'Method',
+                'function': 'Function',
+                'property': 'Property',
+                'file': 'File',
+                'directory': 'Directory',
+                'interface': 'Interface',
+                'trait': 'Trait',
+                'namespace': 'Namespace',
+                'module': 'Module',
+                'variable': 'Variable',
+                'constant': 'Constant',
+                'metadata': 'Metadata'
+            }
+            if self.kind.lower() in kind_label_map:
+                labels.append(kind_label_map[self.kind.lower()])
+                
+        return labels
+        
 
 @dataclass
 class Module(CoreNode):
@@ -168,6 +200,26 @@ class Relationship:
             'plugin_id': self.plugin_id,
             'created_at': self.created_at.isoformat()
         }
+
+
+@dataclass
+class Endpoint(CoreNode):
+    """API Endpoint abstraction for cross-language connections"""
+    method: str = ""  # GET, POST, PUT, DELETE, PATCH
+    path: str = ""     # /api/v1/Lead
+    controller: Optional[str] = None
+    action: Optional[str] = None
+    entity: Optional[str] = None  # Entity name if applicable
+    
+    def __post_init__(self):
+        self.type = 'Endpoint'
+        # Generate ID from method and path
+        import hashlib
+        self.id = hashlib.md5(f"{self.method}:{self.path}".encode()).hexdigest()
+        
+    def get_labels(self) -> List[str]:
+        """Return list of Neo4j labels for this endpoint"""
+        return ['Endpoint', 'API', self.method]
 
 
 # Plugin extension examples

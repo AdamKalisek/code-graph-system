@@ -1,0 +1,16 @@
+{
+  "name": "memory",
+  "version": "1.0.0",
+  "description": "A groundbreaking, plugin-based code analysis platform that creates knowledge graphs from any codebase using Neo4j.",
+  "main": "test_api.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@babel/parser": "^7.28.3",
+    "@babel/traverse": "^7.28.3"
+  }
+}

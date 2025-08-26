@@ -116,7 +116,7 @@ class FederatedGraphStore:
     
     def store_nodes(self, nodes: List[CoreNode], language: str = None) -> int:
         """
-        Store nodes in the graph using bulk ingestion with UNWIND.
+        Store nodes in the graph using bulk ingestion with UNWIND and multi-labels.
         
         Args:
             nodes: List of nodes to store
@@ -128,30 +128,42 @@ class FederatedGraphStore:
         if not nodes:
             return 0
             
-        # Group nodes by type for efficient bulk operations
-        nodes_by_type = {}
+        # Group nodes by their label set for efficient bulk operations
+        nodes_by_labels = {}
         for node in nodes:
             data = node.to_dict()
             # Add language tag if using unified mode
             if self.federation_mode == 'unified' and language:
                 data['_language'] = language
             
-            node_type = data.get('type', 'Node')
-            if node_type not in nodes_by_type:
-                nodes_by_type[node_type] = []
+            # Get multi-labels if node supports it
+            if hasattr(node, 'get_labels'):
+                labels = node.get_labels()
+                label_key = ':'.join(labels)
+            else:
+                # Fallback to single label
+                node_type = data.get('type', 'Node')
+                label_key = node_type
+                labels = [node_type]
+            
+            if label_key not in nodes_by_labels:
+                nodes_by_labels[label_key] = {'labels': labels, 'nodes': []}
             
             # Flatten properties for Neo4j
             flattened_props = self._flatten_dict(data)
-            nodes_by_type[node_type].append(flattened_props)
+            nodes_by_labels[label_key]['nodes'].append(flattened_props)
         
-        # Bulk create nodes using UNWIND
+        # Bulk create nodes using UNWIND with multi-labels
         total_created = 0
         try:
-            for node_type, node_list in nodes_by_type.items():
-                # Use UNWIND for bulk operations (100-1000x faster)
+            for label_key, data in nodes_by_labels.items():
+                labels_str = ':'.join(data['labels'])
+                node_list = data['nodes']
+                
+                # Use UNWIND for bulk operations with multi-labels
                 query = f"""
                     UNWIND $nodes AS node_data
-                    MERGE (n:{node_type} {{id: node_data.id}})
+                    MERGE (n:{labels_str} {{id: node_data.id}})
                     SET n += node_data
                     RETURN count(n) as created
                 """
@@ -160,7 +172,7 @@ class FederatedGraphStore:
                 if result:
                     total_created += result[0].get('created', 0)
                     
-            logger.info(f"Stored {total_created} nodes using bulk ingestion")
+            logger.info(f"Stored {total_created} nodes using bulk ingestion with multi-labels")
             return total_created
             
         except Exception as e:
