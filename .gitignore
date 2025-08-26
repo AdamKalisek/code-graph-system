@@ -23,6 +23,7 @@ espocrm/
 *.log
 .env
 config/local.yaml
+tmp/
 
 # Neo4j
 neo4j-data/
