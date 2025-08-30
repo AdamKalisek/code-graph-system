@@ -17,7 +17,11 @@ class NikicPHPParser:
     """PHP parser using nikic/PHP-Parser for accurate AST parsing"""
     
     def __init__(self):
-        self.parser_script = Path(__file__).parent / 'ast_parser.php'
+        # Use enhanced parser with relationship extraction
+        self.parser_script = Path(__file__).parent / 'ast_parser_enhanced.php'
+        if not self.parser_script.exists():
+            # Fallback to basic parser if enhanced not found
+            self.parser_script = Path(__file__).parent / 'ast_parser.php'
         if not self.parser_script.exists():
             raise FileNotFoundError(f"PHP parser script not found: {self.parser_script}")
             
@@ -114,17 +118,34 @@ class NikicPHPParser:
             
         # Process relationships
         for rel_data in ast_data.get('relationships', []):
-            rel = Relationship(
-                type=rel_data['type'],
-                source_id=rel_data['source_id'],
-                target_id=rel_data['target_id']
-            )
-            
-            # Store target FQN for unresolved references
-            if 'target_fqn' in rel_data:
-                rel.metadata = {'target_fqn': rel_data['target_fqn']}
+            try:
+                # Skip if missing required fields
+                if 'target_id' not in rel_data:
+                    if 'target_fqn' in rel_data:
+                        # For unresolved references (like external interfaces), create a placeholder target_id
+                        rel_data['target_id'] = f"unresolved_{rel_data['target_fqn'].replace('\\', '_').replace('::', '_')}"
+                    else:
+                        continue
                 
-            relationships.append(rel)
+                # Skip if missing source_id
+                if 'source_id' not in rel_data:
+                    continue
+                
+                rel = Relationship(
+                    type=rel_data['type'],
+                    source_id=rel_data['source_id'],
+                    target_id=rel_data['target_id']
+                )
+                
+                # Store target FQN for unresolved references
+                if 'target_fqn' in rel_data:
+                    rel.metadata = {'target_fqn': rel_data['target_fqn']}
+                    
+                relationships.append(rel)
+            except KeyError as e:
+                print(f"Warning: Skipping relationship due to missing field: {e}")
+                print(f"Relationship data: {rel_data}")
+                continue
             
         return ParseResult(
             file_path=file_path,
