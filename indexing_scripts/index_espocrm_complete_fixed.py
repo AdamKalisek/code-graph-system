@@ -18,7 +18,7 @@ sys.path.append('.')
 from code_graph_system.core.graph_store import FederatedGraphStore
 from code_graph_system.core.schema import Symbol, Relationship
 from plugins.php.plugin import PHPLanguagePlugin
-from plugins.javascript.api_parser import JavaScriptAPIParser
+from plugins.javascript.enhanced_parser import JavaScriptEnhancedParser
 from plugins.espocrm.formula_parser import FormulaDSLParser
 
 # Setup logging
@@ -38,7 +38,7 @@ class ComprehensiveEspoCRMIndexer:
         
         # Initialize parsers
         self.php_plugin = PHPLanguagePlugin()
-        self.js_api_parser = JavaScriptAPIParser()
+        self.js_parser = JavaScriptEnhancedParser()
         self.formula_parser = FormulaDSLParser()
         
         # Track statistics
@@ -94,10 +94,22 @@ class ComprehensiveEspoCRMIndexer:
         relationships = []
         dir_nodes = {}
         
+        # Add root directory
+        root_id = hashlib.md5(str(self.espocrm_path.name).encode()).hexdigest()
+        root_node = Symbol(
+            name=self.espocrm_path.name,
+            qualified_name=self.espocrm_path.name,
+            kind='directory',
+            plugin_id='indexer'
+        )
+        root_node.id = root_id
+        nodes.append(root_node)
+        dir_nodes['.'] = root_id
+        
         # Collect all directories
         for path in self.espocrm_path.rglob("*"):
-            if path.is_dir() and not path.name.startswith('.'):
-                rel_path = path.relative_to(self.espocrm_path.parent)
+            if path.is_dir() and not path.name.startswith('.') and path.name != '__pycache__':
+                rel_path = path.relative_to(self.espocrm_path)
                 dir_id = hashlib.md5(str(rel_path).encode()).hexdigest()
                 
                 node = Symbol(
@@ -165,7 +177,7 @@ class ComprehensiveEspoCRMIndexer:
                 all_nodes.append(file_node)
                 
                 # Add file to directory relationship
-                parent_dir = file_path.parent.relative_to(self.espocrm_path.parent)
+                parent_dir = file_path.parent.relative_to(self.espocrm_path)
                 dir_id = hashlib.md5(str(parent_dir).encode()).hexdigest()
                 all_relationships.append(Relationship(
                     type='IN_DIRECTORY',
@@ -237,50 +249,29 @@ class ComprehensiveEspoCRMIndexer:
         
         for file_path in files:
             try:
-                # Parse with JS API parser
-                result = self.js_api_parser.parse_file(str(file_path))
+                # Parse with enhanced JS parser
+                result = self.js_parser.parse_file(str(file_path))
                 
+                if result.errors:
+                    logger.debug(f"    Parse errors in {file_path.name}: {result.errors}")
+                    continue
+                
+                # Add all nodes from parser
+                all_nodes.extend(result.nodes)
+                
+                # Add file to directory relationship
                 file_id = hashlib.md5(str(file_path).encode()).hexdigest()
+                parent_dir = file_path.parent.relative_to(self.espocrm_path)
+                dir_id = hashlib.md5(str(parent_dir).encode()).hexdigest()
+                all_relationships.append(Relationship(
+                    type='IN_DIRECTORY',
+                    source_id=file_id,
+                    target_id=dir_id
+                ))
                 
-                # Create nodes for API calls
-                for api_call in result.get('api_calls', []):
-                    call_id = hashlib.md5(f"{file_path}:{api_call['line']}:{api_call['endpoint']}".encode()).hexdigest()
-                    node = Symbol(
-                        name=f"API_{api_call['method']}_{api_call['endpoint']}",
-                        qualified_name=f"{file_path}:{api_call['line']}",
-                        kind='api_call',
-                        plugin_id='js'
-                    )
-                    node.id = call_id
-                    node.metadata = api_call
-                    all_nodes.append(node)
-                    
-                    # Create relationship
-                    all_relationships.append(Relationship(
-                        type='CALLS_API',
-                        source_id=file_id,
-                        target_id=call_id
-                    ))
-                    
-                # Create nodes for model operations
-                for model_op in result.get('model_operations', []):
-                    op_id = hashlib.md5(f"{file_path}:{model_op['line']}:{model_op['operation']}".encode()).hexdigest()
-                    node = Symbol(
-                        name=f"Model_{model_op['operation']}_{model_op.get('model', 'unknown')}",
-                        qualified_name=f"{file_path}:{model_op['line']}",
-                        kind='model_operation',
-                        plugin_id='js'
-                    )
-                    node.id = op_id
-                    node.metadata = model_op
-                    all_nodes.append(node)
-                    
-                    all_relationships.append(Relationship(
-                        type='MODEL_OPERATION',
-                        source_id=file_id,
-                        target_id=op_id
-                    ))
-                    
+                # Add all relationships from parser
+                all_relationships.extend(result.relationships)
+                
                 self.stats['js_files'] += 1
                 
             except Exception as e:
