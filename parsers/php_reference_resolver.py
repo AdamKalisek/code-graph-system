@@ -84,6 +84,55 @@ class PHPReferenceResolver:
             if name_node:
                 self.context.current_namespace = self._get_node_text(name_node, content)
         
+        elif node.type == 'namespace_use_declaration':
+            logger.debug(f"Found namespace_use_declaration at line {node.start_point[0] + 1}")
+            # Create IMPORTS edges for use statements
+            for child in node.children:
+                logger.debug(f"  Checking child type: {child.type}")
+                if child.type == 'namespace_use_clause':
+                    # Get the imported namespace/class
+                    # The structure is: name (or qualified_name) [as alias]
+                    name_node = None
+                    alias_node = None
+                    
+                    for clause_child in child.children:
+                        if clause_child.type in ['name', 'qualified_name']:
+                            name_node = clause_child
+                        elif clause_child.type == 'namespace_aliasing_clause':
+                            # Handle alias
+                            for alias_child in clause_child.children:
+                                if alias_child.type == 'name':
+                                    alias_node = alias_child
+                    
+                    logger.debug(f"  name_node: {name_node}, alias_node: {alias_node}")
+                    
+                    if name_node:
+                        imported_name = self._get_node_text(name_node, content)
+                        alias = self._get_node_text(alias_node, content) if alias_node else imported_name.split('\\')[-1]
+                        logger.debug(f"  Importing: {imported_name}")
+                        
+                        # Find the source file symbol to attach the import to
+                        # We'll use the namespace or first class in the file
+                        source_symbol = self._get_file_main_symbol()
+                        logger.debug(f"  Source symbol: {source_symbol.name if source_symbol else None}")
+                        if source_symbol:
+                            # Try to resolve the imported symbol
+                            target = self.symbol_table.resolve(imported_name, "", {})
+                            
+                            # If not found, create a placeholder for external dependency
+                            if not target:
+                                target = self._create_external_symbol(imported_name)
+                            
+                            if target:
+                                self.symbol_table.add_reference(
+                                    source_id=source_symbol.id,
+                                    target_id=target.id,
+                                    reference_type='IMPORTS',
+                                    line=child.start_point[0] + 1,
+                                    column=child.start_point[1],
+                                    context=f"Imports {imported_name}"
+                                )
+        
         elif node.type == 'class_declaration':
             name_node = node.child_by_field_name('name')
             if name_node:
@@ -98,8 +147,16 @@ class PHPReferenceResolver:
                 )
                 
                 if class_symbol:
-                    # Resolve extends
-                    extends_node = node.child_by_field_name('superclass')
+                    # Resolve extends (try both field names for compatibility)
+                    extends_node = node.child_by_field_name('superclass')  # Older versions
+                    if not extends_node:
+                        # Newer versions use base_clause
+                        for child in node.children:
+                            if child.type == 'base_clause':
+                                for base_child in child.children:
+                                    if base_child.type in ['name', 'qualified_name']:
+                                        extends_node = base_child
+                                        break
                     if extends_node:
                         self._resolve_type_reference(extends_node, content, class_symbol.id, 'EXTENDS')
                     
@@ -118,9 +175,10 @@ class PHPReferenceResolver:
                     self.context.current_class = None
                     return
         
-        elif node.type == 'trait_use_clause':
-            # Resolve trait uses
-            if parent_symbol:
+        elif node.type in ['trait_use_clause', 'use_declaration']:
+            # Resolve trait uses (inside a class context)
+            # Check if we're inside a class and this is a trait use
+            if parent_symbol and parent_symbol.type == SymbolType.CLASS:
                 for child in node.children:
                     if child.type in ['name', 'qualified_name']:
                         self._resolve_type_reference(child, content, parent_symbol.id, 'USES_TRAIT')
@@ -145,10 +203,10 @@ class PHPReferenceResolver:
                     if params_node:
                         self._resolve_parameter_types(params_node, content, func_symbol.id)
                     
-                    # Resolve return type
+                    # Resolve return type (handles simple, nullable, union, etc.)
                     return_node = node.child_by_field_name('return_type')
                     if return_node:
-                        self._resolve_type_reference(return_node, content, func_symbol.id, 'RETURNS')
+                        self._traverse_and_resolve_type_nodes(return_node, content, func_symbol.id, 'RETURNS')
                     
                     # Traverse function body
                     body_node = node.child_by_field_name('body')
@@ -172,18 +230,40 @@ class PHPReferenceResolver:
             self._resolve_static_call(node, content, parent_symbol)
         
         elif node.type == 'class_constant_access_expression':
+            logger.debug(f"Found class_constant_access_expression at line {node.start_point[0] + 1}")
             self._resolve_class_constant(node, content, parent_symbol)
         
         elif node.type == 'object_creation_expression':
             self._resolve_new_expression(node, content, parent_symbol)
         
+        elif node.type == 'instanceof_expression':
+            # The RHS of an 'instanceof' is a type reference
+            # e.g., $obj instanceof MyClass, $obj instanceof A|B
+            rhs_node = node.child_by_field_name('type')
+            if not rhs_node:
+                # Fallback: look for name/qualified_name after 'instanceof' keyword
+                instanceof_found = False
+                for child in node.children:
+                    if instanceof_found and child.type in ['name', 'qualified_name']:
+                        self._traverse_and_resolve_type_nodes(child, content, 
+                                                             parent_symbol.id if parent_symbol else None, 
+                                                             'INSTANCEOF')
+                        break
+                    if child.type == 'instanceof':
+                        instanceof_found = True
+            elif parent_symbol:
+                self._traverse_and_resolve_type_nodes(rhs_node, content, parent_symbol.id, 'INSTANCEOF')
+        
         elif node.type in ['name', 'qualified_name']:
             # Could be a type reference in various contexts
+            # Note: instanceof is handled directly now
             parent_type = node.parent.type if node.parent else None
-            if parent_type in ['binary_expression', 'instanceof_expression']:
-                self._resolve_type_reference(node, content, 
-                                            parent_symbol.id if parent_symbol else None,
-                                            'INSTANCEOF')
+            if parent_type == 'binary_expression':
+                # This could be for other comparisons, skip for now
+                pass
+        
+        elif node.type == 'throw_expression':
+            self._resolve_throw_expression(node, content, parent_symbol)
         
         # Traverse children
         for child in node.children:
@@ -314,15 +394,21 @@ class PHPReferenceResolver:
     
     def _resolve_class_constant(self, node: Node, content: bytes, parent_symbol: Optional[Symbol]) -> None:
         """Resolve a class constant access like ClassName::CONSTANT"""
-        class_node = node.child_by_field_name('class')
-        name_node = node.child_by_field_name('name')
+        # The structure is: name (class), ::, name (constant)
+        children = list(node.children)
+        if len(children) < 3:
+            return
         
-        if not class_node or not name_node:
+        class_node = children[0] if children[0].type == 'name' else None
+        const_node = children[2] if len(children) > 2 and children[2].type == 'name' else None
+        
+        if not class_node or not const_node:
             return
         
         class_name = self._get_node_text(class_node, content)
-        const_name = self._get_node_text(name_node, content)
+        const_name = self._get_node_text(const_node, content)
         
+        logger.debug(f"Resolving class constant: {class_name}::{const_name}")
         resolved = self.resolver.resolve_class_constant(class_name, const_name, self.context)
         
         if resolved and parent_symbol:
@@ -367,6 +453,32 @@ class PHPReferenceResolver:
                             )
                 return
     
+    def _resolve_throw_expression(self, node: Node, content: bytes, parent_symbol: Optional[Symbol]) -> None:
+        """Resolve a throw expression like 'throw new ExceptionClass()'"""
+        for child in node.children:
+            if child.type == 'object_creation_expression':
+                # Find the class being instantiated
+                for grandchild in child.children:
+                    if grandchild.type in ['name', 'qualified_name']:
+                        exception_class = self._get_node_text(grandchild, content)
+                        
+                        resolved = self._resolve_class_name(exception_class)
+                        
+                        # If not found, create external symbol for built-in exceptions
+                        if not resolved and ('Exception' in exception_class or 'Error' in exception_class):
+                            resolved = self._create_external_symbol(exception_class)
+                        
+                        if resolved and parent_symbol:
+                            self.symbol_table.add_reference(
+                                source_id=parent_symbol.id,
+                                target_id=resolved.id,
+                                reference_type='THROWS',
+                                line=node.start_point[0] + 1,
+                                column=node.start_point[1],
+                                context=f"Throws {exception_class}"
+                            )
+                        return
+    
     def _resolve_type_reference(self, node: Node, content: bytes, 
                                source_id: str, reference_type: str) -> None:
         """Resolve a type reference"""
@@ -390,7 +502,39 @@ class PHPReferenceResolver:
             if child.type in ['simple_parameter', 'variadic_parameter', 'property_promotion_parameter']:
                 type_node = child.child_by_field_name('type')
                 if type_node:
-                    self._resolve_type_reference(type_node, content, function_id, 'PARAMETER_TYPE')
+                    # A parameter type can also be complex (union, etc.)
+                    self._traverse_and_resolve_type_nodes(type_node, content, function_id, 'PARAMETER_TYPE')
+    
+    def _traverse_and_resolve_type_nodes(self, type_node: Node, content: bytes, 
+                                         source_id: str, reference_type: str) -> None:
+        """
+        Traverses a type hint node which may be simple, nullable, a union, or an intersection,
+        and creates a reference for each constituent type name found.
+        
+        This uses an iterative approach to avoid deep recursion on complex types.
+        Handles: string, ?string, A|B, A&B, and nested combinations.
+        """
+        if not source_id:
+            return
+            
+        nodes_to_visit = [type_node]
+        
+        while nodes_to_visit:
+            current_node = nodes_to_visit.pop()
+            
+            # If we find a name, resolve it. This is our base case.
+            if current_node.type in ['name', 'qualified_name']:
+                type_name = self._get_node_text(current_node, content)
+                
+                # Ignore primitive types that won't be in the symbol table
+                if type_name not in ['string', 'int', 'float', 'bool', 'array', 
+                                     'object', 'void', 'mixed', 'never', 'null',
+                                     'false', 'true', 'callable', 'iterable', 'resource']:
+                    self._resolve_type_reference(current_node, content, source_id, reference_type)
+            # Otherwise, add its children to the stack to visit them next.
+            else:
+                # Add children in reverse to maintain original order
+                nodes_to_visit.extend(reversed(current_node.children))
     
     def _resolve_class_name(self, class_name: str) -> Optional[Symbol]:
         """Resolve a class name considering context"""
@@ -430,6 +574,61 @@ class PHPReferenceResolver:
         if self.context.current_namespace and not name.startswith('\\'):
             return f"{self.context.current_namespace}\\{name}"
         return name.lstrip('\\')
+    
+    def _get_file_main_symbol(self) -> Optional[Symbol]:
+        """Get the main symbol for the current file (namespace or first class)"""
+        symbols = self.symbol_table.get_symbols_in_file(self.context.current_file)
+        
+        # Prefer namespace
+        for symbol in symbols:
+            if symbol.type == SymbolType.NAMESPACE:
+                return symbol
+        
+        # Fall back to first class
+        for symbol in symbols:
+            if symbol.type == SymbolType.CLASS:
+                return symbol
+        
+        # Fall back to any symbol
+        return symbols[0] if symbols else None
+    
+    def _create_external_symbol(self, name: str) -> Optional[Symbol]:
+        """Create a placeholder symbol for external dependencies"""
+        # Determine the type based on naming conventions
+        symbol_type = SymbolType.CLASS  # Default to class
+        
+        # Check if it's likely an interface or trait
+        if 'Interface' in name:
+            symbol_type = SymbolType.INTERFACE
+        elif 'Trait' in name:
+            symbol_type = SymbolType.TRAIT
+        elif 'Exception' in name or 'Error' in name:
+            symbol_type = SymbolType.CLASS
+        
+        # Create a unique ID for the external symbol
+        import hashlib
+        symbol_id = hashlib.md5(f"external:{name}".encode()).hexdigest()
+        
+        # Check if we already created this external symbol
+        # Try to resolve by ID
+        existing = self.symbol_table.resolve(symbol_id, "", {})
+        if existing:
+            return existing
+        
+        # Create the external symbol
+        symbol = Symbol(
+            id=symbol_id,
+            name=name,
+            type=symbol_type,
+            file_path="<external>",  # Mark as external
+            line_number=0,
+            column_number=0,
+            namespace=None,
+            metadata={"is_external": True}
+        )
+        
+        self.symbol_table.add_symbol(symbol)
+        return symbol
     
     def _get_node_text(self, node: Node, content: bytes) -> str:
         """Get the text content of a node"""

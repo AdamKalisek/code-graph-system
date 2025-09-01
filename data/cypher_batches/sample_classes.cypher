@@ -1,0 +1,10 @@
+CREATE INDEX class_name IF NOT EXISTS FOR (c:Class) ON (c.name);
+CREATE (:Symbol:Class {id: "9904beec11b30b065df0d613c80e0c9f", name: "Espo\\Binding", type: "class", file: "espocrm/application/Espo/Binding.php", line: 42, namespace: "Espo"});
+CREATE (:Symbol:Class {id: "63f420c54980db0df88338f846c03dd6", name: "Espo\\Repositories\\Integration", type: "class", file: "espocrm/application/Espo/Repositories/Integration.php", line: 41, namespace: "Espo\\Repositories"});
+CREATE (:Symbol:Class {id: "756f11e77e9022d5af5e8b5f800d18a1", name: "Espo\\Repositories\\Webhook", type: "class", file: "espocrm/application/Espo/Repositories/Webhook.php", line: 39, namespace: "Espo\\Repositories"});
+CREATE (:Symbol:Class {id: "8ea4d191c100f365af3cb3e8af1917a4", name: "Espo\\Repositories\\EmailFolder", type: "class", file: "espocrm/application/Espo/Repositories/EmailFolder.php", line: 37, namespace: "Espo\\Repositories"});
+CREATE (:Symbol:Class {id: "588e81345f2d8b7b417879eb42112290", name: "Espo\\Repositories\\User", type: "class", file: "espocrm/application/Espo/Repositories/User.php", line: 43, namespace: "Espo\\Repositories"});
+CREATE (:Symbol:Class {id: "a145dd23bbc979f38a107aee55e4e657", name: "Espo\\Repositories\\Attachment", type: "class", file: "espocrm/application/Espo/Repositories/Attachment.php", line: 43, namespace: "Espo\\Repositories"});
+CREATE (:Symbol:Class {id: "6c769945b5707edd3f3dd25a86b10224", name: "Espo\\Repositories\\ScheduledJob", type: "class", file: "espocrm/application/Espo/Repositories/ScheduledJob.php", line: 40, namespace: "Espo\\Repositories"});
+CREATE (:Symbol:Class {id: "b76a75eac26eda7ff057a8784ecf83d9", name: "Espo\\Repositories\\LayoutSet", type: "class", file: "espocrm/application/Espo/Repositories/LayoutSet.php", line: 40, namespace: "Espo\\Repositories"});
+CREATE (:Symbol:Class {id: "1e20cf55decc6ee898677c01eb07add4", name: "Espo\\Repositories\\Sms", type: "class", file: "espocrm/application/Espo/Repositories/Sms.php", line: 41, namespace: "Espo\\Repositories"});

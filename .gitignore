@@ -1,3 +1,6 @@
+# Claude AI memories and context
+.claude/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -35,3 +38,13 @@ test_*.json
 # Dependencies
 node_modules/
 vendor/
+
+# Archive folder - contains obsolete and dead code
+archive/
+archive.zip
+archive.tar.gz
+
+# Cache and temporary files
+.cache/
+*.cache
+*.tmp

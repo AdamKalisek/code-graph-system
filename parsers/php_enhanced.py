@@ -206,9 +206,18 @@ class PHPSymbolCollector:
             elif child.type == 'final_modifier':
                 is_final = True
         
-        # Get extends
+        # Get extends (try both field names for compatibility)
         extends = None
-        extends_node = node.child_by_field_name('superclass')
+        extends_node = node.child_by_field_name('superclass')  # Older versions
+        if not extends_node:
+            # Newer versions use base_clause
+            for child in node.children:
+                if child.type == 'base_clause':
+                    # Extract the actual class name from "extends ClassName"
+                    for base_child in child.children:
+                        if base_child.type in ['name', 'qualified_name']:
+                            extends_node = base_child
+                            break
         if extends_node:
             extends = self._get_node_text(extends_node)
         
@@ -438,7 +447,12 @@ class PHPSymbolCollector:
         # Handle each constant in the declaration
         for child in node.children:
             if child.type == 'const_element':
-                name_node = child.child_by_field_name('name')
+                # The name is the first child of type 'name'
+                name_node = None
+                for elem_child in child.children:
+                    if elem_child.type == 'name':
+                        name_node = elem_child
+                        break
                 if name_node:
                     const_name = self._get_node_text(name_node)
                     
