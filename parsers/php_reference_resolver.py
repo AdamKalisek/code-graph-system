@@ -8,8 +8,11 @@ from tree_sitter import Language, Parser, Node
 import tree_sitter_php
 import logging
 
-from symbol_table import SymbolTable, Symbol, SymbolType
-from symbol_table.resolution import SymbolResolver, ResolutionContext
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.core.symbol_table import SymbolTable, Symbol, SymbolType
+from src.core.resolution import SymbolResolver, ResolutionContext
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,10 @@ class PHPReferenceResolver:
             raise
     
     def _traverse(self, node: Node, content: bytes, parent_symbol: Optional[Symbol] = None) -> None:
-        """Traverse the AST and resolve references"""
+        """FIXED TRAVERSAL - Proper parent symbol propagation"""
+        
+        # CRITICAL: Maintain symbol stack for proper call graph
+        current_symbol = parent_symbol
         
         # Update context based on node type
         if node.type == 'namespace_definition':
@@ -119,9 +125,9 @@ class PHPReferenceResolver:
                             # Try to resolve the imported symbol
                             target = self.symbol_table.resolve(imported_name, "", {})
                             
-                            # If not found, create a placeholder for external dependency
+                            # If not found, use enhanced fallback resolution
                             if not target:
-                                target = self._create_external_symbol(imported_name)
+                                target = self._resolve_with_fallback(imported_name, self.context)
                             
                             if target:
                                 self.symbol_table.add_reference(
@@ -167,7 +173,7 @@ class PHPReferenceResolver:
                                 if interface.type in ['name', 'qualified_name']:
                                     self._resolve_type_reference(interface, content, class_symbol.id, 'IMPLEMENTS')
                     
-                    # Traverse class body with updated context
+                    # FIXED: Pass class_symbol as parent to children
                     for child in node.children:
                         if child.type == 'declaration_list':
                             self._traverse(child, content, class_symbol)
@@ -175,13 +181,18 @@ class PHPReferenceResolver:
                     self.context.current_class = None
                     return
         
-        elif node.type in ['trait_use_clause', 'use_declaration']:
-            # Resolve trait uses (inside a class context)
-            # Check if we're inside a class and this is a trait use
-            if parent_symbol and parent_symbol.type == SymbolType.CLASS:
-                for child in node.children:
-                    if child.type in ['name', 'qualified_name']:
-                        self._resolve_type_reference(child, content, parent_symbol.id, 'USES_TRAIT')
+        elif node.type in ['use_declaration', 'trait_use_clause']:
+            # ENHANCED: Detect ALL trait usage patterns
+            if current_symbol and current_symbol.type == SymbolType.CLASS:
+                self._resolve_trait_usage(node, content, current_symbol)
+        
+        # NEW: Handle trait usage in different AST structures
+        elif node.type == 'expression_statement':
+            # Sometimes trait usage appears as expression
+            for child in node.children:
+                if child.type == 'use_expression':
+                    if current_symbol and current_symbol.type == SymbolType.CLASS:
+                        self._resolve_trait_usage(child, content, current_symbol)
         
         elif node.type in ['function_definition', 'method_declaration']:
             name_node = node.child_by_field_name('name')
@@ -208,7 +219,7 @@ class PHPReferenceResolver:
                     if return_node:
                         self._traverse_and_resolve_type_nodes(return_node, content, func_symbol.id, 'RETURNS')
                     
-                    # Traverse function body
+                    # FIXED: Pass method_symbol as parent to method body
                     body_node = node.child_by_field_name('body')
                     if body_node:
                         self._traverse(body_node, content, func_symbol)
@@ -216,25 +227,25 @@ class PHPReferenceResolver:
                 self.context.current_function = old_function
                 return
         
-        # Resolve references in expressions
+        # ENHANCED: Track ALL call types with proper parent propagation
         elif node.type == 'function_call_expression':
-            self._resolve_function_call(node, content, parent_symbol)
+            self._resolve_function_call(node, content, current_symbol)
         
         elif node.type == 'member_call_expression':
-            self._resolve_method_call(node, content, parent_symbol)
+            self._resolve_method_call(node, content, current_symbol)
         
         elif node.type == 'member_access_expression':
-            self._resolve_property_access(node, content, parent_symbol)
+            self._resolve_property_access(node, content, current_symbol)
         
-        elif node.type == 'scoped_call_expression':
-            self._resolve_static_call(node, content, parent_symbol)
+        elif node.type == 'scoped_call_expression':  # Static calls
+            self._resolve_static_call(node, content, current_symbol)
         
         elif node.type == 'class_constant_access_expression':
             logger.debug(f"Found class_constant_access_expression at line {node.start_point[0] + 1}")
-            self._resolve_class_constant(node, content, parent_symbol)
+            self._resolve_class_constant(node, content, current_symbol)
         
-        elif node.type == 'object_creation_expression':
-            self._resolve_new_expression(node, content, parent_symbol)
+        elif node.type == 'object_creation_expression':  # new ClassName()
+            self._resolve_new_expression(node, content, current_symbol)
         
         elif node.type == 'instanceof_expression':
             # The RHS of an 'instanceof' is a type reference
@@ -265,22 +276,46 @@ class PHPReferenceResolver:
         elif node.type == 'throw_expression':
             self._resolve_throw_expression(node, content, parent_symbol)
         
-        # Traverse children
+        # Continue traversal with SAME parent symbol (current_symbol)
         for child in node.children:
-            self._traverse(child, content, parent_symbol)
+            self._traverse(child, content, current_symbol)
     
     def _resolve_function_call(self, node: Node, content: bytes, parent_symbol: Optional[Symbol]) -> None:
-        """Resolve a function call"""
+        """ENHANCED function call resolution"""
+        if not parent_symbol:
+            return  # Can't track calls without source context
+        
         function_node = node.child_by_field_name('function')
         if not function_node:
             return
         
         function_name = self._get_node_text(function_node, content)
         
-        # Try to resolve the function
-        resolved = self.resolver.resolve_function_call(function_name, self.context)
+        # Handle different call patterns
+        if '::' in function_name:
+            # Static method call like ClassName::method
+            parts = function_name.split('::')
+            if len(parts) == 2:
+                class_name, method_name = parts
+                class_symbol = self._resolve_with_fallback(class_name, self.context)
+                if class_symbol:
+                    # Find method in class
+                    methods = self.symbol_table.get_children(class_symbol.id)
+                    for method in methods:
+                        if method.type == SymbolType.METHOD and method.name == method_name:
+                            self.symbol_table.add_reference(
+                                source_id=parent_symbol.id,
+                                target_id=method.id,
+                                reference_type='CALLS_STATIC',
+                                line=node.start_point[0] + 1,
+                                column=node.start_point[1],
+                                context=f"Static call {class_name}::{method_name}"
+                            )
+                            return
         
-        if resolved and parent_symbol:
+        # Regular function call
+        resolved = self._resolve_with_fallback(function_name, self.context)
+        if resolved:
             self.symbol_table.add_reference(
                 source_id=parent_symbol.id,
                 target_id=resolved.id,
@@ -288,14 +323,6 @@ class PHPReferenceResolver:
                 line=node.start_point[0] + 1,
                 column=node.start_point[1],
                 context=f"Calls {function_name}"
-            )
-        elif not resolved:
-            self.resolver.track_unresolved(
-                'function_call',
-                function_name,
-                self.context,
-                node.start_point[0] + 1,
-                node.start_point[1]
             )
     
     def _resolve_method_call(self, node: Node, content: bytes, parent_symbol: Optional[Symbol]) -> None:
@@ -481,20 +508,55 @@ class PHPReferenceResolver:
     
     def _resolve_type_reference(self, node: Node, content: bytes, 
                                source_id: str, reference_type: str) -> None:
-        """Resolve a type reference"""
+        """Resolve a type reference with type validation"""
         type_name = self._get_node_text(node, content)
         
         resolved = self.resolver.resolve_type(type_name, self.context)
         
         if resolved and source_id:
-            self.symbol_table.add_reference(
-                source_id=source_id,
-                target_id=resolved.id,
-                reference_type=reference_type,
-                line=node.start_point[0] + 1,
-                column=node.start_point[1],
-                context=f"{reference_type} {type_name}"
-            )
+            # Type validation: ensure correct relationships
+            valid = True
+            error_msg = None
+            
+            if reference_type == 'EXTENDS':
+                # Classes can only extend other classes
+                # Interfaces can extend other interfaces
+                source_symbol = self.symbol_table.get_by_id(source_id)
+                if source_symbol:
+                    if source_symbol.type == SymbolType.CLASS and resolved.type != SymbolType.CLASS:
+                        valid = False
+                        error_msg = f"Class {source_symbol.name} cannot extend non-class {resolved.name} (type: {resolved.type})"
+                    elif source_symbol.type == SymbolType.INTERFACE and resolved.type != SymbolType.INTERFACE:
+                        valid = False
+                        error_msg = f"Interface {source_symbol.name} cannot extend non-interface {resolved.name} (type: {resolved.type})"
+            
+            elif reference_type == 'IMPLEMENTS':
+                # Only interfaces can be implemented
+                if resolved.type != SymbolType.INTERFACE:
+                    valid = False
+                    source_symbol = self.symbol_table.get_by_id(source_id)
+                    if source_symbol:
+                        error_msg = f"Class {source_symbol.name} cannot implement non-interface {resolved.name} (type: {resolved.type})"
+            
+            elif reference_type == 'USES_TRAIT':
+                # Only traits can be used
+                if resolved.type != SymbolType.TRAIT:
+                    valid = False
+                    source_symbol = self.symbol_table.get_by_id(source_id)
+                    if source_symbol:
+                        error_msg = f"Class {source_symbol.name} cannot use non-trait {resolved.name} (type: {resolved.type})"
+            
+            if valid:
+                self.symbol_table.add_reference(
+                    source_id=source_id,
+                    target_id=resolved.id,
+                    reference_type=reference_type,
+                    line=node.start_point[0] + 1,
+                    column=node.start_point[1],
+                    context=f"{reference_type} {type_name}"
+                )
+            elif error_msg:
+                logger.warning(error_msg)
     
     def _resolve_parameter_types(self, params_node: Node, content: bytes, function_id: str) -> None:
         """Resolve type hints in function parameters"""
@@ -592,8 +654,84 @@ class PHPReferenceResolver:
         # Fall back to any symbol
         return symbols[0] if symbols else None
     
-    def _create_external_symbol(self, name: str) -> Optional[Symbol]:
-        """Create a placeholder symbol for external dependencies"""
+    def _resolve_with_fallback(self, name: str, context: 'ResolutionContext') -> Optional[Symbol]:
+        """ENHANCED RESOLUTION - Try multiple strategies before marking external"""
+        
+        # Strategy 1: Standard resolution
+        resolved = self.symbol_table.resolve(name, context.current_namespace, context.imports)
+        if resolved:
+            return resolved
+        
+        # Strategy 2: Try EspoCRM common namespaces
+        espocrm_namespaces = [
+            "Espo\\Core",
+            "Espo\\Entities", 
+            "Espo\\Services",
+            "Espo\\Controllers",
+            "Espo\\Repositories",
+            "Espo\\Tools",
+            "Espo\\ORM",
+            "Espo\\Modules\\Crm",
+            "Espo\\Classes"
+        ]
+        
+        # Try with each namespace
+        for namespace in espocrm_namespaces:
+            full_name = f"{namespace}\\{name}"
+            resolved = self.symbol_table.resolve(full_name, "", {})
+            if resolved:
+                return resolved
+        
+        # Strategy 3: Search by partial name match in database
+        cursor = self.symbol_table.conn.execute(
+            "SELECT * FROM symbols WHERE name LIKE ? AND type IN ('class', 'interface', 'trait') LIMIT 1",
+            (f"%\\{name}",)
+        )
+        row = cursor.fetchone()
+        if row:
+            from src.core.symbol_table import Symbol
+            return Symbol.from_row(row)
+        
+        # Strategy 4: Only NOW create external symbol as last resort
+        # But mark it clearly for later review
+        return self._create_external_symbol(name, is_likely_internal=name.startswith('Espo'))
+
+    def _resolve_trait_usage(self, node: Node, content: bytes, class_symbol: Symbol) -> None:
+        """COMPREHENSIVE trait usage resolution"""
+        
+        # Extract trait names from various patterns
+        trait_names = []
+        
+        # Pattern 1: use TraitName;
+        for child in node.children:
+            if child.type in ['name', 'qualified_name']:
+                trait_names.append(self._get_node_text(child, content))
+            
+            # Pattern 2: use TraitName { method as alias; }
+            elif child.type == 'use_list':
+                for list_child in child.children:
+                    if list_child.type in ['name', 'qualified_name']:
+                        trait_names.append(self._get_node_text(list_child, content))
+        
+        # Resolve each trait and create USES_TRAIT relationship
+        for trait_name in trait_names:
+            trait_symbol = self._resolve_with_fallback(trait_name, self.context)
+            
+            if trait_symbol and trait_symbol.type == SymbolType.TRAIT:
+                self.symbol_table.add_reference(
+                    source_id=class_symbol.id,
+                    target_id=trait_symbol.id,
+                    reference_type='USES_TRAIT',
+                    line=node.start_point[0] + 1,
+                    column=node.start_point[1],
+                    context=f"Uses trait {trait_name}"
+                )
+            elif not trait_symbol:
+                # Log missing trait for review
+                logger.warning(f"Could not resolve trait {trait_name} in {class_symbol.name}")
+
+    def _create_external_symbol(self, name: str, is_likely_internal: bool = False) -> Optional[Symbol]:
+        """Create external symbol with better classification"""
         # Determine the type based on naming conventions
         symbol_type = SymbolType.CLASS  # Default to class
         
@@ -607,24 +745,27 @@ class PHPReferenceResolver:
         
         # Create a unique ID for the external symbol
         import hashlib
-        symbol_id = hashlib.md5(f"external:{name}".encode()).hexdigest()
+        symbol_id = f"external_{hashlib.md5(name.encode()).hexdigest()}"
         
         # Check if we already created this external symbol
-        # Try to resolve by ID
-        existing = self.symbol_table.resolve(symbol_id, "", {})
+        existing = self.symbol_table.get_by_id(symbol_id)
         if existing:
             return existing
         
-        # Create the external symbol
+        # Create the external symbol with better metadata
         symbol = Symbol(
             id=symbol_id,
             name=name,
             type=symbol_type,
-            file_path="<external>",  # Mark as external
+            file_path="<external>" if not is_likely_internal else "<unresolved>",
             line_number=0,
             column_number=0,
             namespace=None,
-            metadata={"is_external": True}
+            metadata={
+                "is_external": not is_likely_internal,
+                "is_unresolved_internal": is_likely_internal,  # FLAG for review
+                "created_by": "fallback_resolution"
+            }
         )
         
         self.symbol_table.add_symbol(symbol)

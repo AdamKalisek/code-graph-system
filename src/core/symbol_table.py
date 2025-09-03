@@ -216,13 +216,17 @@ class SymbolTable:
     
     def resolve(self, name: str, current_namespace: str = "",
                 imports: Optional[Dict[str, str]] = None) -> Optional[Symbol]:
-        """Resolve a symbol name to a Symbol object
+        """FIXED VERSION - Resolve a symbol name to a Symbol object
         
         Resolution order:
         1. Check if it's a fully qualified name
-        2. Check imports (aliases)
+        2. Check imports (aliases) FIRST before namespace resolution
         3. Check current namespace
         4. Check global namespace
+        5. NEW: Try partial namespace matching for EspoCRM classes
+        
+        IMPORTANT: Only resolve to PHP symbols (classes, interfaces, traits, functions),
+        never to directories or files.
         """
         imports = imports or {}
         
@@ -231,11 +235,21 @@ class SymbolTable:
         if cache_key in self._resolve_cache:
             return self._resolve_cache[cache_key]
         
-        # 1. Check if fully qualified
-        if '\\' in name or '/' in name:
+        # Define PHP code symbol types (exclude directories and files)
+        php_symbol_types = ('class', 'interface', 'trait', 'function', 'namespace', 'enum')
+        
+        # FIX: Don't reject namespace names with backslashes!
+        # Only reject if it's clearly a file path (has .extension)
+        if '/' in name and ('.' in name.split('/')[-1]):
+            self._resolve_cache[cache_key] = None
+            return None
+        
+        # 1. Check if fully qualified (starts with \)
+        if name.startswith('\\'):
+            clean_name = name[1:]  # Remove leading \
             cursor = self.conn.execute(
-                "SELECT * FROM symbols WHERE name = ? LIMIT 1",
-                (name,)
+                "SELECT * FROM symbols WHERE name = ? AND type IN (?, ?, ?, ?, ?, ?) LIMIT 1",
+                (clean_name, *php_symbol_types)
             )
             row = cursor.fetchone()
             if row:
@@ -243,12 +257,14 @@ class SymbolTable:
                 self._resolve_cache[cache_key] = result
                 return result
         
-        # 2. Check imports
+        # 2. Check imports FIRST (before namespace resolution)
         if name in imports:
             resolved_name = imports[name]
+            # Try with leading backslash removed
+            clean_name = resolved_name.lstrip('\\')
             cursor = self.conn.execute(
-                "SELECT * FROM symbols WHERE name = ? LIMIT 1",
-                (resolved_name,)
+                "SELECT * FROM symbols WHERE name = ? AND type IN (?, ?, ?, ?, ?, ?) LIMIT 1",
+                (clean_name, *php_symbol_types)
             )
             row = cursor.fetchone()
             if row:
@@ -256,12 +272,12 @@ class SymbolTable:
                 self._resolve_cache[cache_key] = result
                 return result
         
-        # 3. Check current namespace
+        # 3. Check current namespace + name
         if current_namespace:
             namespaced_name = f"{current_namespace}\\{name}"
             cursor = self.conn.execute(
-                "SELECT * FROM symbols WHERE name = ? OR name = ? LIMIT 1",
-                (namespaced_name, f"{current_namespace}/{name}")
+                "SELECT * FROM symbols WHERE name = ? AND type IN (?, ?, ?, ?, ?, ?) LIMIT 1",
+                (namespaced_name, *php_symbol_types)
             )
             row = cursor.fetchone()
             if row:
@@ -269,10 +285,10 @@ class SymbolTable:
                 self._resolve_cache[cache_key] = result
                 return result
         
-        # 4. Check global namespace
+        # 4. Check global namespace (exact match)
         cursor = self.conn.execute(
-            "SELECT * FROM symbols WHERE name = ? AND namespace IS NULL LIMIT 1",
-            (name,)
+            "SELECT * FROM symbols WHERE name = ? AND type IN (?, ?, ?, ?, ?, ?) LIMIT 1",
+            (name, *php_symbol_types)
         )
         row = cursor.fetchone()
         if row:
@@ -280,8 +296,29 @@ class SymbolTable:
             self._resolve_cache[cache_key] = result
             return result
         
+        # 5. NEW: Try partial namespace matching for EspoCRM classes
+        if '\\' not in name:  # Only for simple class names
+            cursor = self.conn.execute(
+                "SELECT * FROM symbols WHERE name LIKE ? AND type IN (?, ?, ?, ?, ?, ?) LIMIT 1",
+                (f"%\\{name}", *php_symbol_types)
+            )
+            row = cursor.fetchone()
+            if row:
+                result = Symbol.from_row(row)
+                self._resolve_cache[cache_key] = result
+                return result
+        
         self._resolve_cache[cache_key] = None
         return None
+    
+    def get_by_id(self, symbol_id: str) -> Optional[Symbol]:
+        """Get a symbol by its ID"""
+        cursor = self.conn.execute(
+            "SELECT * FROM symbols WHERE id = ? LIMIT 1",
+            (symbol_id,)
+        )
+        row = cursor.fetchone()
+        return Symbol.from_row(row) if row else None
     
     def get_symbols_in_file(self, file_path: str) -> List[Symbol]:
         """Get all symbols in a file"""

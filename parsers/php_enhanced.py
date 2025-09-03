@@ -8,7 +8,10 @@ from tree_sitter import Language, Parser, Node
 import tree_sitter_php
 import logging
 
-from symbol_table import SymbolTable, Symbol, SymbolType
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from src.core.symbol_table import SymbolTable, Symbol, SymbolType
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +154,7 @@ class PHPSymbolCollector:
             
             # Add namespace as a symbol
             symbol = Symbol(
-                id=self._generate_id(node),
+                id=self._generate_id(node, SymbolType.NAMESPACE),
                 name=self.current_namespace,
                 type=SymbolType.NAMESPACE,
                 file_path=self.current_file,
@@ -177,7 +180,7 @@ class PHPSymbolCollector:
                     
                     # Add import as a symbol
                     symbol = Symbol(
-                        id=self._generate_id(child),
+                        id=self._generate_id(child, SymbolType.IMPORT),
                         name=alias,
                         type=SymbolType.IMPORT,
                         file_path=self.current_file,
@@ -231,7 +234,7 @@ class PHPSymbolCollector:
         
         # Create symbol
         symbol = Symbol(
-            id=self._generate_id(node),
+            id=self._generate_id(node, SymbolType.CLASS),
             name=full_name,
             type=SymbolType.CLASS,
             file_path=self.current_file,
@@ -266,7 +269,7 @@ class PHPSymbolCollector:
                         extends.append(self._get_node_text(base))
         
         symbol = Symbol(
-            id=self._generate_id(node),
+            id=self._generate_id(node, SymbolType.INTERFACE),
             name=full_name,
             type=SymbolType.INTERFACE,
             file_path=self.current_file,
@@ -290,7 +293,7 @@ class PHPSymbolCollector:
         full_name = self._get_full_name(trait_name)
         
         symbol = Symbol(
-            id=self._generate_id(node),
+            id=self._generate_id(node, SymbolType.TRAIT),
             name=full_name,
             type=SymbolType.TRAIT,
             file_path=self.current_file,
@@ -324,7 +327,7 @@ class PHPSymbolCollector:
             return_type = self._get_node_text(return_node)
         
         symbol = Symbol(
-            id=self._generate_id(node),
+            id=self._generate_id(node, SymbolType.FUNCTION),
             name=full_name,
             type=SymbolType.FUNCTION,
             file_path=self.current_file,
@@ -375,7 +378,7 @@ class PHPSymbolCollector:
             return_type = self._get_node_text(return_node)
         
         symbol = Symbol(
-            id=self._generate_id(node),
+            id=self._generate_id(node, SymbolType.METHOD),
             name=method_name,
             type=SymbolType.METHOD,
             file_path=self.current_file,
@@ -420,7 +423,7 @@ class PHPSymbolCollector:
                     property_name = self._get_node_text(name_node).lstrip('$')
                     
                     symbol = Symbol(
-                        id=self._generate_id(child),
+                        id=self._generate_id(child, SymbolType.PROPERTY),
                         name=property_name,
                         type=SymbolType.PROPERTY,
                         file_path=self.current_file,
@@ -457,7 +460,7 @@ class PHPSymbolCollector:
                     const_name = self._get_node_text(name_node)
                     
                     symbol = Symbol(
-                        id=self._generate_id(child),
+                        id=self._generate_id(child, SymbolType.CONSTANT),
                         name=const_name,
                         type=SymbolType.CONSTANT,
                         file_path=self.current_file,
@@ -489,9 +492,9 @@ class PHPSymbolCollector:
                     break
         
         symbol = Symbol(
-            id=self._generate_id(node),
+            id=self._generate_id(node, SymbolType.ENUM),
             name=full_name,
-            type=SymbolType.CLASS,  # Treat enum as a special class
+            type=SymbolType.ENUM,
             file_path=self.current_file,
             line_number=node.start_point[0] + 1,
             column_number=node.start_point[1],
@@ -557,10 +560,56 @@ class PHPSymbolCollector:
             content = f.read()
             return content[node.start_byte:node.end_byte].decode('utf-8')
     
-    def _generate_id(self, node: Node) -> str:
-        """Generate a unique ID for a symbol"""
+    def _generate_id(self, node: Node, symbol_type: SymbolType = None) -> str:
+        """Generate a unique ID for a symbol with proper prefix"""
+        # Determine prefix based on node type
+        prefix = ""
+        if symbol_type:
+            if symbol_type == SymbolType.CLASS:
+                prefix = "php_class_"
+            elif symbol_type == SymbolType.INTERFACE:
+                prefix = "php_interface_"
+            elif symbol_type == SymbolType.TRAIT:
+                prefix = "php_trait_"
+            elif symbol_type == SymbolType.FUNCTION:
+                prefix = "php_function_"
+            elif symbol_type == SymbolType.METHOD:
+                prefix = "php_method_"
+            elif symbol_type == SymbolType.PROPERTY:
+                prefix = "php_property_"
+            elif symbol_type == SymbolType.CONSTANT:
+                prefix = "php_constant_"
+            elif symbol_type == SymbolType.NAMESPACE:
+                prefix = "php_namespace_"
+            elif symbol_type == SymbolType.IMPORT:
+                prefix = "php_import_"
+            elif symbol_type == SymbolType.ENUM:
+                prefix = "php_enum_"
+        else:
+            # Fallback based on node.type
+            if node.type == 'class_declaration':
+                prefix = "php_class_"
+            elif node.type == 'interface_declaration':
+                prefix = "php_interface_"
+            elif node.type == 'trait_declaration':
+                prefix = "php_trait_"
+            elif node.type == 'function_definition':
+                prefix = "php_function_"
+            elif node.type == 'method_declaration':
+                prefix = "php_method_"
+            elif node.type == 'property_declaration':
+                prefix = "php_property_"
+            elif node.type == 'const_declaration':
+                prefix = "php_constant_"
+            elif node.type == 'namespace_definition':
+                prefix = "php_namespace_"
+            elif node.type == 'namespace_use_clause':
+                prefix = "php_import_"
+            elif node.type == 'enum_declaration':
+                prefix = "php_enum_"
+                
         id_string = f"{self.current_file}:{node.start_point[0]}:{node.start_point[1]}:{node.type}"
-        return hashlib.md5(id_string.encode()).hexdigest()
+        return prefix + hashlib.md5(id_string.encode()).hexdigest()
     
     def parse_directory(self, directory: str, extensions: List[str] = None) -> None:
         """Parse all PHP files in a directory"""

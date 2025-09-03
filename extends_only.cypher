@@ -1,0 +1,10 @@
+MATCH (s {id: 'php_class_3fb79fcb3a2073cebeb05fd2d950b39a'}), (t {id: 'php_class_609d9d376962df39bcb2eff8c36f5f6b'}) CREATE (s)-[:EXTENDS]->(t);
+MATCH (s {id: 'php_class_923db38756bb641a44aec966f92f2e2d'}), (t {id: 'php_class_609d9d376962df39bcb2eff8c36f5f6b'}) CREATE (s)-[:EXTENDS]->(t);
+MATCH (s {id: 'php_class_48d1e438905ee802891e7d1501b5cbfb'}), (t {id: 'b6852e28573a6e1be9f1dcffd7814628'}) CREATE (s)-[:EXTENDS]->(t);
+MATCH (s {id: 'php_class_11a46a312f7e9462bd186bb48f7c5a8d'}), (t {id: 'php_class_c7db9eceff900d15403bf81b2f81c20d'}) CREATE (s)-[:EXTENDS]->(t);
+MATCH (s {id: 'php_class_f2e814340accc6558177d1c54ee3b319'}), (t {id: 'php_class_812a55d25e4759da402ee6059a845e52'}) CREATE (s)-[:EXTENDS]->(t);
+MATCH (s {id: 'php_class_e1dfcd913f218f0da36a7647ad7ba9af'}), (t {id: 'php_class_52b6e4510103923f72cb3c0ef04c38c6'}) CREATE (s)-[:EXTENDS]->(t);
+MATCH (s {id: 'php_class_8af20ad8a9e1146391b0be6ad68b19f9'}), (t {id: 'php_class_52b6e4510103923f72cb3c0ef04c38c6'}) CREATE (s)-[:EXTENDS]->(t);
+MATCH (s {id: 'php_class_fc5220b0fd2ebc1ad74eded9a2c424c4'}), (t {id: 'php_class_52b6e4510103923f72cb3c0ef04c38c6'}) CREATE (s)-[:EXTENDS]->(t);
+MATCH (s {id: 'php_class_ce296a7110ab6af7b9826afe07634f2f'}), (t {id: 'php_class_52b6e4510103923f72cb3c0ef04c38c6'}) CREATE (s)-[:EXTENDS]->(t);
+MATCH (s {id: 'php_class_a15db863cbf8b37f45ed419acfe88b47'}), (t {id: 'php_class_52b6e4510103923f72cb3c0ef04c38c6'}) CREATE (s)-[:EXTENDS]->(t);

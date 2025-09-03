@@ -10,6 +10,7 @@ import sys
 import time
 import json
 import sqlite3
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 from collections import defaultdict
@@ -18,7 +19,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # Backend parsers
-from src.core.symbol_table import SymbolTable
+from src.core.symbol_table import SymbolTable, Symbol, SymbolType
 from parsers.php_enhanced import PHPSymbolCollector
 from parsers.php_reference_resolver import PHPReferenceResolver
 
@@ -34,9 +35,10 @@ logger = logging.getLogger(__name__)
 class CompleteEspoCRMIndexer:
     """Complete indexer for entire EspoCRM codebase"""
     
-    def __init__(self, project_path: str):
-        self.project_path = Path(project_path)
-        self.symbol_table = SymbolTable('.cache/complete_espocrm.db')
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self.project_path = Path('espocrm')  # Always process EspoCRM
+        self.symbol_table = SymbolTable(db_path)
         self.js_parser = EspoCRMJavaScriptParser()
         
         # Statistics
@@ -64,28 +66,118 @@ class CompleteEspoCRMIndexer:
         logger.info("COMPLETE ESPOCRM INDEXING - BACKEND + FRONTEND")
         logger.info("="*70)
         
+        # Step 0: Index File Structure (FUNDAMENTAL!)
+        logger.info("\n[1/6] INDEXING FILE STRUCTURE...")
+        self._index_file_structure()
+        
         # Step 1: Index PHP Backend
-        logger.info("\n[1/5] INDEXING PHP BACKEND...")
+        logger.info("\n[2/6] INDEXING PHP BACKEND...")
         self._index_php_backend()
         
         # Step 2: Index JavaScript Frontend
-        logger.info("\n[2/5] INDEXING JAVASCRIPT FRONTEND...")
+        logger.info("\n[3/6] INDEXING JAVASCRIPT FRONTEND...")
         self._index_javascript_frontend()
         
         # Step 3: Create Cross-Language Links
-        logger.info("\n[3/5] CREATING CROSS-LANGUAGE LINKS...")
+        logger.info("\n[4/6] CREATING CROSS-LANGUAGE LINKS...")
         self._create_cross_language_links()
         
         # Step 4: Export to Neo4j
-        logger.info("\n[4/5] EXPORTING TO NEO4J...")
+        logger.info("\n[5/6] EXPORTING TO NEO4J...")
         self._export_to_neo4j()
         
         # Step 5: Generate Statistics
-        logger.info("\n[5/5] GENERATING STATISTICS...")
+        logger.info("\n[6/6] GENERATING STATISTICS...")
         self.stats['total_time'] = time.time() - start_time
         self._print_statistics()
         
         return self.stats
+    
+    def _index_file_structure(self):
+        """Index complete file and directory structure - FUNDAMENTAL for ANY codebase"""
+        import os
+        
+        logger.info(f"Indexing file structure for {self.project_path}...")
+        
+        dir_count = 0
+        file_count = 0
+        seen_dirs = set()
+        
+        # Walk the entire directory tree
+        for root, dirs, files in os.walk(self.project_path):
+            root_path = Path(root)
+            
+            # Skip hidden and vendor directories
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'vendor' and d != 'node_modules']
+            
+            # Create directory node
+            dir_id = f"dir_{hashlib.md5(str(root_path).encode()).hexdigest()}"
+            
+            if str(root_path) not in seen_dirs:
+                dir_sym = Symbol(
+                    id=dir_id,
+                    name=root_path.name if root_path.name else str(self.project_path),
+                    type=SymbolType.FILE,  # Using FILE type for directories too
+                    file_path=str(root_path),
+                    line_number=0,
+                    column_number=0,
+                    metadata={'node_type': 'directory', 'path': str(root_path)}
+                )
+                self.symbol_table.add_symbol(dir_sym)
+                seen_dirs.add(str(root_path))
+                dir_count += 1
+                
+                # Create parent-child relationship for directories
+                parent_path = root_path.parent
+                if str(parent_path) in seen_dirs and str(parent_path) != str(root_path):
+                    parent_id = f"dir_{hashlib.md5(str(parent_path).encode()).hexdigest()}"
+                    self.symbol_table.add_reference(
+                        source_id=parent_id,
+                        target_id=dir_id,
+                        reference_type='CONTAINS',
+                        line=0,
+                        column=0,
+                        context='directory_structure'
+                    )
+            
+            # Create file nodes
+            for file_name in files:
+                file_path = root_path / file_name
+                
+                # Skip non-code files
+                if not any(file_name.endswith(ext) for ext in ['.php', '.js', '.jsx', '.ts', '.tsx', '.json', '.yml', '.yaml', '.xml', '.html', '.css', '.scss']):
+                    continue
+                
+                file_id = f"file_{hashlib.md5(str(file_path).encode()).hexdigest()}"
+                
+                file_sym = Symbol(
+                    id=file_id,
+                    name=file_name,
+                    type=SymbolType.FILE,
+                    file_path=str(file_path),
+                    line_number=0,
+                    column_number=0,
+                    metadata={'node_type': 'file', 'extension': file_path.suffix}
+                )
+                self.symbol_table.add_symbol(file_sym)
+                file_count += 1
+                
+                # Create directory->file relationship
+                self.symbol_table.add_reference(
+                    source_id=dir_id,
+                    target_id=file_id,
+                    reference_type='CONTAINS',
+                    line=0,
+                    column=0,
+                    context='file_in_directory'
+                )
+        
+        # Commit file structure to database
+        self.symbol_table.conn.commit()
+        
+        self.stats['directories'] = dir_count
+        self.stats['files'] = file_count
+        logger.info(f"Indexed {dir_count} directories and {file_count} files")
     
     def _index_php_backend(self):
         """Index all PHP files"""
@@ -120,6 +212,9 @@ class CompleteEspoCRMIndexer:
         
         # Collect PHP endpoints
         self._collect_php_endpoints()
+        
+        # Link symbols to files
+        self._link_symbols_to_files()
         
         # Get statistics
         stats = self.symbol_table.get_stats()
@@ -167,17 +262,38 @@ class CompleteEspoCRMIndexer:
                     # Add JS symbols with js_ prefix to distinguish from PHP
                     symbol_id = f"js_{symbol.id}"
                     
-                    self.symbol_table.add_symbol(
+                    # Map JS types to SymbolType enum
+                    type_mapping = {
+                        'class': SymbolType.CLASS,
+                        'function': SymbolType.FUNCTION,
+                        'method': SymbolType.METHOD,
+                        'property': SymbolType.PROPERTY,
+                        'variable': SymbolType.VARIABLE,
+                        'import': SymbolType.IMPORT,
+                        'constant': SymbolType.CONSTANT,
+                        'api_call': SymbolType.FUNCTION,  # API calls are function calls
+                        'event_handler': SymbolType.METHOD,  # Event handlers are methods
+                        'template': SymbolType.FILE,  # Templates are like files
+                        'backbone_model': SymbolType.CLASS,
+                        'backbone_view': SymbolType.CLASS,
+                        'backbone_collection': SymbolType.CLASS,
+                    }
+                    
+                    symbol_type = type_mapping.get(symbol.type, SymbolType.VARIABLE)
+                    
+                    # Create Symbol object
+                    sym = Symbol(
                         id=symbol_id,
                         name=symbol.name,
-                        type=f"js_{symbol.type}",
-                        file=str(file_path),
+                        type=symbol_type,
+                        file_path=str(file_path),
+                        line_number=symbol.line,
+                        column_number=symbol.column,
                         namespace=None,
-                        line=symbol.line,
-                        column=symbol.column,
                         parent_id=None,
-                        metadata=json.dumps(symbol.metadata) if symbol.metadata else None
+                        metadata={'js_type': symbol.type, 'js_metadata': symbol.metadata}
                     )
+                    self.symbol_table.add_symbol(sym)
                     
                     # Track API calls for cross-language linking
                     if symbol.type == 'api_call':
@@ -206,16 +322,19 @@ class CompleteEspoCRMIndexer:
                 total_js_references += len(references)
                 
             except Exception as e:
-                logger.debug(f"Error parsing JS file {file_path}: {e}")
+                logger.error(f"Error parsing JS file {file_path}: {e}")
         
         self.stats['js_symbols'] = total_js_symbols
         self.stats['js_references'] = total_js_references
+        
+        # Commit JS symbols to database
+        self.symbol_table.conn.commit()
         
         logger.info(f"JavaScript Frontend: {total_js_symbols} symbols, {total_js_references} references")
     
     def _collect_php_endpoints(self):
         """Collect PHP controller endpoints for cross-language linking"""
-        conn = sqlite3.connect('.cache/complete_espocrm.db')
+        conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -299,12 +418,67 @@ class CompleteEspoCRMIndexer:
         self.stats['cross_language_links'] = links_created
         logger.info(f"Created {links_created} cross-language links")
     
+    def _link_symbols_to_files(self):
+        """Create FILE->SYMBOL relationships"""
+        logger.info("Creating file->symbol relationships...")
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Get all symbols with their file paths
+        symbols = cursor.execute("""
+            SELECT id, file_path FROM symbols 
+            WHERE file_path IS NOT NULL 
+            AND id NOT LIKE 'file_%' 
+            AND id NOT LIKE 'dir_%'
+        """).fetchall()
+        
+        links_created = 0
+        for symbol_id, file_path in symbols:
+            if file_path:
+                # Generate file ID
+                file_id = f"file_{hashlib.md5(file_path.encode()).hexdigest()}"
+                
+                # Check if file node exists
+                file_exists = cursor.execute(
+                    "SELECT COUNT(*) FROM symbols WHERE id = ?", (file_id,)
+                ).fetchone()[0]
+                
+                if file_exists:
+                    # Create FILE->SYMBOL relationship
+                    self.symbol_table.add_reference(
+                        source_id=file_id,
+                        target_id=symbol_id,
+                        reference_type='CONTAINS',
+                        line=0,
+                        column=0,
+                        context='symbol_in_file'
+                    )
+                    links_created += 1
+        
+        self.symbol_table.conn.commit()
+        conn.close()
+        
+        logger.info(f"Created {links_created} file->symbol relationships")
+    
+    def _format_cypher_props(self, props):
+        """Format properties dictionary for Cypher syntax"""
+        items = []
+        for key, value in props.items():
+            # Escape backslashes first, then single quotes
+            if isinstance(value, str):
+                value = value.replace("\\", "\\\\").replace("'", "\\'")
+                items.append(f"{key}: '{value}'")
+            else:
+                items.append(f"{key}: {value}")
+        return "{" + ", ".join(items) + "}"
+    
     def _export_to_neo4j(self):
         """Export complete graph to Neo4j"""
         logger.info("Preparing Neo4j export...")
         
         # Connect to database
-        conn = sqlite3.connect('.cache/complete_espocrm.db')
+        conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -321,19 +495,30 @@ class CompleteEspoCRMIndexer:
             
             # Create indexes
             f.write("CREATE INDEX symbol_id IF NOT EXISTS FOR (s:Symbol) ON (s.id);\n")
+            f.write("CREATE INDEX file_id IF NOT EXISTS FOR (f:File) ON (f.id);\n")
+            f.write("CREATE INDEX dir_id IF NOT EXISTS FOR (d:Directory) ON (d.id);\n")
             f.write("CREATE INDEX php_class IF NOT EXISTS FOR (c:PHPClass) ON (c.name);\n")
             f.write("CREATE INDEX js_module IF NOT EXISTS FOR (m:JSModule) ON (m.name);\n\n")
             
             # Create nodes
             for symbol in symbols:
-                # Determine node label based on type
+                # Determine node label based on ID prefix and type
+                symbol_id = symbol['id']
                 symbol_type = symbol['type']
-                if symbol_type.startswith('js_'):
+                
+                # File and Directory nodes
+                if symbol_id.startswith('dir_'):
+                    label = 'Directory'
+                elif symbol_id.startswith('file_'):
+                    label = 'File'
+                # JavaScript symbols
+                elif symbol_id.startswith('js_'):
                     label = 'JSSymbol'
                     if 'class' in symbol_type or 'backbone' in symbol_type:
                         label = 'JSModule'
                     elif 'api_call' in symbol_type:
                         label = 'APICall'
+                # PHP symbols
                 else:
                     label = 'PHPSymbol'
                     if symbol_type == 'class':
@@ -348,22 +533,33 @@ class CompleteEspoCRMIndexer:
                 }
                 
                 # Add optional properties
-                if symbol['file']:
-                    props['file'] = symbol['file']
-                if symbol['line']:
-                    props['line'] = symbol['line']
-                if symbol['namespace']:
-                    props['namespace'] = symbol['namespace']
+                try:
+                    if symbol['file_path']:
+                        props['file'] = symbol['file_path']
+                except (KeyError, IndexError):
+                    pass
+                try:
+                    if symbol['line_number']:
+                        props['line'] = symbol['line_number']
+                except (KeyError, IndexError):
+                    pass
+                try:
+                    if symbol['namespace']:
+                        props['namespace'] = symbol['namespace']
+                except (KeyError, IndexError):
+                    pass
                 
-                f.write(f"CREATE (n:{label} {json.dumps(props)});\n")
+                # Format properties for Cypher (not JSON)
+                props_str = self._format_cypher_props(props)
+                f.write(f"CREATE (n:{label} {props_str});\n")
             
             f.write("\n// Creating relationships\n")
             
             # Create relationships
             for ref in references:
-                rel_type = ref['type'].replace('-', '_').upper()
-                f.write(f"MATCH (s:Symbol {{id: '{ref['source_id']}'}}), ")
-                f.write(f"(t:Symbol {{id: '{ref['target_id']}'}}) ")
+                rel_type = ref['reference_type'].replace('-', '_').upper()
+                f.write(f"MATCH (s {{id: '{ref['source_id']}'}}), ")
+                f.write(f"(t {{id: '{ref['target_id']}'}}) ")
                 f.write(f"CREATE (s)-[:{rel_type}]->(t);\n")
         
         conn.close()
@@ -418,13 +614,13 @@ class CompleteEspoCRMIndexer:
                 print(f"  {endpoint}: {count} calls")
         
         # Calculate edge type statistics
-        conn = sqlite3.connect('.cache/complete_espocrm.db')
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         edge_types = cursor.execute("""
-            SELECT type, COUNT(*) as count 
+            SELECT reference_type, COUNT(*) as count 
             FROM symbol_references 
-            GROUP BY type 
+            GROUP BY reference_type 
             ORDER BY count DESC
         """).fetchall()
         
@@ -436,7 +632,7 @@ class CompleteEspoCRMIndexer:
         
         print("\n✅ INDEXING COMPLETE!")
         print(f"📄 Export file: espocrm_complete.cypher")
-        print(f"📊 Database: .cache/complete_espocrm.db")
+        print(f"📊 Database: {self.db_path}")
         print("\nTo visualize in Neo4j:")
         print("  1. Start Neo4j: neo4j start")
         print("  2. Import: cat espocrm_complete.cypher | cypher-shell -u neo4j -p your_password")
@@ -445,7 +641,7 @@ class CompleteEspoCRMIndexer:
 
 def main():
     parser = argparse.ArgumentParser(description='Complete EspoCRM Indexer')
-    parser.add_argument('--project', default='espocrm', help='EspoCRM project path')
+    parser.add_argument('--db', default='data/espocrm_complete.db', help='Database path')
     parser.add_argument('--verbose', action='store_true', help='Verbose output')
     
     args = parser.parse_args()
@@ -453,7 +649,7 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    indexer = CompleteEspoCRMIndexer(args.project)
+    indexer = CompleteEspoCRMIndexer(args.db)
     stats = indexer.run()
     
     return 0

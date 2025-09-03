@@ -1,6 +1,8 @@
-# EspoCRM Code Graph System
+# Universal Code Graph System
 
-A comprehensive code analysis and graph visualization system for EspoCRM projects.
+A powerful code analysis and graph visualization system that transforms any codebase into a searchable Neo4j knowledge graph.
+
+> **[📖 Read the BASE IDEA](BASE_IDEA.md)** - Understand the purpose, philosophy, and architecture of this system.
 
 ## Project Structure
 
