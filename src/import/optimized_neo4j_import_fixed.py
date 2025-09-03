@@ -9,6 +9,7 @@ from neo4j import GraphDatabase
 import time
 from typing import Dict, List, Tuple
 import logging
+import hashlib
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -396,6 +397,99 @@ class OptimizedNeo4jImporter:
             for record in result:
                 print(f"  {record['ServiceClass']}.{record['Method']}() - {record['CallCount']} calls")
     
+    def import_config_references(self):
+        """Import configuration references from metadata parsing"""
+        logger.info("Importing configuration references...")
+        
+        conn = sqlite3.connect(self.sqlite_db)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Check if config_references table exists
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name='config_references'
+        """)
+        if not cursor.fetchone():
+            logger.info("No config_references table found, skipping...")
+            return
+        
+        # Get config references
+        cursor.execute("""
+            SELECT config_file, config_key, class_name, reference_type
+            FROM config_references
+        """)
+        references = cursor.fetchall()
+        
+        if not references:
+            logger.info("No config references found")
+            conn.close()
+            return
+        
+        logger.info(f"Found {len(references)} configuration references to import")
+        
+        with self.driver.session() as session:
+            # Create ConfigFile nodes
+            config_files = {}
+            for ref in references:
+                config_file = ref['config_file']
+                if config_file not in config_files:
+                    # Create ConfigFile node
+                    file_id = f"config_{hashlib.md5(config_file.encode()).hexdigest()}"
+                    query = """
+                    CREATE (n:ConfigFile:File)
+                    SET n.id = $id, n.path = $path, n.type = 'json'
+                    """
+                    session.run(query, id=file_id, path=config_file)
+                    config_files[config_file] = file_id
+                    self.stats['nodes_created'] += 1
+            
+            # Create REGISTERED_IN relationships
+            registered_count = 0
+            for ref in references:
+                file_id = config_files[ref['config_file']]
+                class_name = ref['class_name']
+                
+                # Create relationship from class to config file
+                query = """
+                MATCH (c:PHPClass) WHERE c.name = $class_name
+                MATCH (f:ConfigFile {id: $file_id})
+                CREATE (c)-[r:REGISTERED_IN]->(f)
+                SET r.config_key = $config_key, 
+                    r.registration_type = $ref_type
+                RETURN count(r) as created
+                """
+                result = session.run(query,
+                    class_name=class_name,
+                    file_id=file_id,
+                    config_key=ref['config_key'],
+                    ref_type=ref['reference_type']
+                )
+                
+                created = result.single()['created']
+                if created:
+                    registered_count += created
+                    self.stats['relationships_created'] += created
+                    
+                    # Mark authentication hooks specially
+                    if ref['reference_type'] == 'AUTHENTICATION_HOOK':
+                        mark_query = """
+                        MATCH (c:PHPClass) WHERE c.name = $class_name
+                        SET c.requires_registration = true,
+                            c.registration_file = $config_file,
+                            c.registration_key = $config_key
+                        """
+                        session.run(mark_query,
+                            class_name=class_name,
+                            config_file=ref['config_file'],
+                            config_key=ref['config_key']
+                        )
+            
+            logger.info(f"Created {len(config_files)} ConfigFile nodes")
+            logger.info(f"Created {registered_count} REGISTERED_IN relationships")
+        
+        conn.close()
+    
     def run(self):
         """Run the complete import process"""
         start_time = time.time()
@@ -410,6 +504,9 @@ class OptimizedNeo4jImporter:
             # Import data
             self.import_nodes_optimized(batch_size=10000)
             self.import_relationships_optimized(batch_size=5000)
+            
+            # Import configuration references if available
+            self.import_config_references()
             
             # Verify
             self.verify_import()

@@ -26,6 +26,9 @@ from parsers.php_reference_resolver import PHPReferenceResolver
 # Frontend parser
 from parsers.js_espocrm_parser import EspoCRMJavaScriptParser
 
+# Metadata parser for EspoCRM JSON configurations
+from parsers.metadata_parser import MetadataParser
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -78,16 +81,20 @@ class CompleteEspoCRMIndexer:
         logger.info("\n[3/6] INDEXING JAVASCRIPT FRONTEND...")
         self._index_javascript_frontend()
         
-        # Step 3: Create Cross-Language Links
-        logger.info("\n[4/6] CREATING CROSS-LANGUAGE LINKS...")
+        # Step 3: Parse EspoCRM Metadata JSON configurations
+        logger.info("\n[4/7] PARSING ESPOCRM METADATA CONFIGURATIONS...")
+        self._parse_metadata_configurations()
+        
+        # Step 4: Create Cross-Language Links
+        logger.info("\n[5/7] CREATING CROSS-LANGUAGE LINKS...")
         self._create_cross_language_links()
         
-        # Step 4: Export to Neo4j
-        logger.info("\n[5/6] EXPORTING TO NEO4J...")
+        # Step 5: Export to Neo4j
+        logger.info("\n[6/7] EXPORTING TO NEO4J...")
         self._export_to_neo4j()
         
-        # Step 5: Generate Statistics
-        logger.info("\n[6/6] GENERATING STATISTICS...")
+        # Step 6: Generate Statistics
+        logger.info("\n[7/7] GENERATING STATISTICS...")
         self.stats['total_time'] = time.time() - start_time
         self._print_statistics()
         
@@ -417,6 +424,40 @@ class CompleteEspoCRMIndexer:
         
         self.stats['cross_language_links'] = links_created
         logger.info(f"Created {links_created} cross-language links")
+    
+    def _parse_metadata_configurations(self):
+        """Parse EspoCRM JSON metadata files for configuration-based relationships"""
+        logger.info("Parsing EspoCRM metadata JSON configurations...")
+        
+        try:
+            metadata_parser = MetadataParser(self.db_path)
+            metadata_parser.parse_metadata(str(self.project_path))
+            metadata_parser.save_to_database()
+            
+            # Check for orphaned hooks
+            orphaned = metadata_parser.get_orphaned_hooks()
+            if orphaned:
+                logger.warning(f"Found {len(orphaned)} orphaned hook implementations")
+                for hook in orphaned[:5]:  # Show first 5
+                    logger.warning(f"  - {hook['class']} implements {hook['implements']} but is NOT REGISTERED")
+            
+            # Get stats
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM config_references WHERE reference_type = 'AUTHENTICATION_HOOK'")
+            auth_hooks = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM config_references WHERE reference_type = 'CLASS_REFERENCE'")
+            class_refs = cursor.fetchone()[0]
+            conn.close()
+            
+            self.stats['metadata_auth_hooks'] = auth_hooks
+            self.stats['metadata_class_refs'] = class_refs
+            logger.info(f"Found {auth_hooks} authentication hooks and {class_refs} class references in metadata")
+            
+        except Exception as e:
+            logger.error(f"Error parsing metadata configurations: {e}")
+            self.stats['metadata_auth_hooks'] = 0
+            self.stats['metadata_class_refs'] = 0
     
     def _link_symbols_to_files(self):
         """Create FILE->SYMBOL relationships"""

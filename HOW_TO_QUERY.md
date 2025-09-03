@@ -156,7 +156,34 @@ LIMIT 30
 
 ## 📊 Data Operations Queries
 
-### 8. How are records saved?
+### 8. How are entities created?
+```cypher
+// Find entity creation through EntityFactory and EntityManager
+MATCH (c:PHPClass)
+WHERE c.name CONTAINS 'EntityFactory' OR c.name CONTAINS 'EntityManager'
+RETURN c.name as ClassName, c.file_path as FilePath
+ORDER BY c.name
+```
+
+```cypher
+// Find methods that instantiate Entity classes
+MATCH (m:PHPMethod)-[:INSTANTIATES]->(c:PHPClass)
+WHERE c.name CONTAINS 'Entity' AND NOT c.name CONTAINS 'Manager' AND NOT c.name CONTAINS 'Factory'
+RETURN m.name as Method, 
+       m.file_path as MethodFile, 
+       c.name as InstantiatedClass
+LIMIT 20
+```
+
+```cypher
+// Trace entity creation call chain
+MATCH path = (m:PHPMethod)-[:CALLS*1..3]->(target:PHPMethod)
+WHERE target.file_path CONTAINS 'EntityFactory' AND target.name = 'create'
+RETURN [node in nodes(path) | node.name] as CallChain
+LIMIT 10
+```
+
+### 9. How are records saved?
 ```cypher
 // Find save/create operations
 MATCH (m:PHPMethod)
@@ -167,7 +194,7 @@ ORDER BY FilePath
 LIMIT 30
 ```
 
-### 9. Database query building
+### 10. Database query building
 ```cypher
 // How are database queries built?
 MATCH (c:PHPClass)
@@ -181,7 +208,7 @@ RETURN c.name as ClassName,
 
 ## 🔄 Import/Export Queries
 
-### 10. How does data import work?
+### 11. How does data import work?
 ```cypher
 // Trace import process
 MATCH (c:PHPClass)
@@ -194,7 +221,7 @@ RETURN c.name as ClassName,
        collect(DISTINCT called.name) as CallsChain
 ```
 
-### 11. Export functionality
+### 12. Export functionality
 ```cypher
 // Find export operations
 MATCH (c:PHPClass)
@@ -207,7 +234,7 @@ RETURN c.name as ClassName,
 
 ## 🔑 API Queries
 
-### 12. API endpoint handling
+### 13. API endpoint handling
 ```cypher
 // Find API controllers and their actions
 MATCH (c:PHPClass)
@@ -220,7 +247,7 @@ ORDER BY c.name
 LIMIT 20
 ```
 
-### 13. REST API routes
+### 14. REST API routes
 ```cypher
 // Find REST operations
 MATCH (m:PHPMethod)
@@ -233,7 +260,7 @@ LIMIT 30
 
 ## 🏗️ Inheritance & Traits Queries
 
-### 14. Class inheritance chains
+### 15. Class inheritance chains
 ```cypher
 // Find inheritance hierarchies
 MATCH path = (child:PHPClass)-[:EXTENDS*1..5]->(parent:PHPClass)
@@ -245,7 +272,7 @@ ORDER BY InheritanceDepth DESC
 LIMIT 20
 ```
 
-### 15. Trait usage patterns
+### 16. Trait usage patterns
 ```cypher
 // Which classes use which traits?
 MATCH (c:PHPClass)-[:USES_TRAIT]->(t:PHPTrait)
@@ -257,7 +284,7 @@ ORDER BY t.name
 
 ## 📊 Statistics Queries
 
-### 16. Most called methods
+### 17. Most called methods
 ```cypher
 // Find the most frequently called methods
 MATCH (m:PHPMethod)<-[r:CALLS]-()
@@ -268,7 +295,7 @@ ORDER BY CallCount DESC
 LIMIT 20
 ```
 
-### 17. Most complex classes (by relationships)
+### 18. Most complex classes (by relationships)
 ```cypher
 // Find classes with most relationships
 MATCH (c:PHPClass)-[r]-()
@@ -281,7 +308,7 @@ LIMIT 20
 
 ## 🔍 Advanced Pattern Queries
 
-### 18. Find circular dependencies
+### 19. Find circular dependencies
 ```cypher
 // Detect circular dependencies
 MATCH path = (c1:PHPClass)-[:EXTENDS|IMPLEMENTS|USES_TRAIT|DEPENDS_ON*2..5]->(c1)
@@ -291,7 +318,7 @@ RETURN c1.name as Class,
 LIMIT 10
 ```
 
-### 19. Find factory patterns
+### 20. Find factory patterns
 ```cypher
 // Find factory methods and classes
 MATCH (c:PHPClass)
@@ -303,7 +330,7 @@ RETURN c.name as FactoryClass,
        c.file_path as FilePath
 ```
 
-### 20. Service layer identification
+### 21. Service layer identification
 ```cypher
 // Find service classes and their operations
 MATCH (c:PHPClass)
