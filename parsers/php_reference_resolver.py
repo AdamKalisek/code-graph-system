@@ -67,6 +67,12 @@ class PHPReferenceResolver:
         self.symbol_table.begin_transaction()
         
         try:
+            # First, create DEFINES relationships for this file
+            self._create_file_defines_relationships(file_path, file_symbols)
+            
+            # Create class->method/property DEFINES relationships
+            self._create_class_defines_relationships(file_symbols)
+            
             # Traverse and resolve references
             self._traverse(tree.root_node, content)
             
@@ -77,6 +83,67 @@ class PHPReferenceResolver:
             logger.error(f"Error resolving references in {file_path}: {e}")
             self.symbol_table.rollback()
             raise
+    
+    def _create_file_defines_relationships(self, file_path: str, file_symbols: List[Symbol]) -> None:
+        """Create DEFINES relationships from File to Classes/Interfaces/Traits"""
+        import hashlib
+        
+        # Generate file ID
+        file_id = f"file_{hashlib.md5(file_path.encode()).hexdigest()}"
+        
+        # Create DEFINES relationships for top-level classes, interfaces, and traits
+        for symbol in file_symbols:
+            if symbol.type in [SymbolType.CLASS, SymbolType.INTERFACE, SymbolType.TRAIT]:
+                # Only create DEFINES for top-level (no parent_id) or symbols whose parent is a namespace
+                if not symbol.parent_id or self._is_namespace_symbol(symbol.parent_id):
+                    self.symbol_table.add_reference(
+                        source_id=file_id,
+                        target_id=symbol.id,
+                        reference_type='DEFINES',
+                        line=symbol.line_number or 0,
+                        column=symbol.column_number or 0,
+                        context='file_defines_class'
+                    )
+                    logger.debug(f"Created DEFINES: {file_id} -> {symbol.id} ({symbol.name})")
+    
+    def _create_class_defines_relationships(self, file_symbols: List[Symbol]) -> None:
+        """Create DEFINES relationships from Classes to their Methods and Properties"""
+        # Group symbols by their parent_id for efficient lookup
+        symbols_by_parent = {}
+        for symbol in file_symbols:
+            if symbol.parent_id:
+                if symbol.parent_id not in symbols_by_parent:
+                    symbols_by_parent[symbol.parent_id] = []
+                symbols_by_parent[symbol.parent_id].append(symbol)
+        
+        # For each class/interface/trait, create DEFINES relationships to its members
+        for symbol in file_symbols:
+            if symbol.type in [SymbolType.CLASS, SymbolType.INTERFACE, SymbolType.TRAIT]:
+                members = symbols_by_parent.get(symbol.id, [])
+                for member in members:
+                    if member.type in [SymbolType.METHOD, SymbolType.PROPERTY, SymbolType.CONSTANT]:
+                        self.symbol_table.add_reference(
+                            source_id=symbol.id,
+                            target_id=member.id,
+                            reference_type='DEFINES',
+                            line=member.line_number or 0,
+                            column=member.column_number or 0,
+                            context='class_defines_member'
+                        )
+                        logger.debug(f"Created DEFINES: {symbol.name} -> {member.name}")
+    
+    def _is_namespace_symbol(self, symbol_id: str) -> bool:
+        """Check if a symbol ID refers to a namespace"""
+        try:
+            # Query the symbol table to check if this is a namespace
+            cursor = self.symbol_table.conn.cursor()
+            result = cursor.execute(
+                "SELECT type FROM symbols WHERE id = ?",
+                (symbol_id,)
+            ).fetchone()
+            return result and result[0] == 'namespace'
+        except:
+            return False
     
     def _traverse(self, node: Node, content: bytes, parent_symbol: Optional[Symbol] = None) -> None:
         """FIXED TRAVERSAL - Proper parent symbol propagation"""
