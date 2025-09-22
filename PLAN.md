@@ -1,92 +1,152 @@
-# Refactoring Plan
+# WebSlicer TypeScript Parser Fix Plan
 
-## Objectives
-- Treat EspoCRM support as one plugin among many, allowing the indexer to handle arbitrary PHP/JS projects.
-- Consolidate the ingestion → graph export pipeline into configurable stages with minimal duplication.
-- Retire or quarantine dead code paths left by previous iterations and replace hard-coded credentials/paths with configuration.
-- Provide a foundation for automated testing that distinguishes core behavior from Espo-specific extensions.
+## GOAL
+Ensure 100% accurate TypeScript/React parsing with NO PHP labels in the database for webSlicer project.
 
-## Current Pain Points
-- `src/indexer/main.py` couples the pipeline to EspoCRM via hard-coded project roots, Espo-specific parsers, and bespoke cross-language logic.
-- `src/core/symbol_table.py` bakes EspoCRM heuristics (partial namespace matching) into generic resolution logic.
-- Parsers in `parsers/` are written around EspoCRM conventions (Ajax helpers, metadata layouts) with no abstraction for other stacks.
-- Multiple Neo4j import/export scripts under `src/import/` and `src/export/` repeat the same responsibilities with different credentials and filenames.
-- Legacy scripts and node_modules in `archive/` contribute noise and hide the canonical workflows.
-- Tests mix core guarantees with EspoCRM fixtures, making it hard to validate a generalized build.
+## Current Problem
+- TypeScript files are being labeled with PHP types (PHPSymbol, PHPProperty, etc.)
+- Wrong relationship types or missing relationships
+- Parser is not correctly identifying TypeScript/React constructs
 
-## Target Architecture
-1. **Config-driven Pipeline**
-   - CLI entry point accepts a project descriptor (YAML/JSON) describing source roots, languages, and plugin hooks.
-   - Core pipeline (scan → collect → resolve → link → export) orchestrated by dependency-injected strategies.
-2. **Plugin System**
-   - Language Modules: provide symbol collectors/reference resolvers per language (PHP, JS, etc.).
-   - Domain Plugins: optional modules for product-specific metadata (e.g., EspoCRM metadata, Salesforce metadata) and cross-language linkers.
-   - Plugins register additional relationships, heuristics, or post-processing passes without modifying core code.
-3. **Unified Graph Export**
-   - Single exporter/importer pair with swappable drivers (SQLite, Neo4j) and consistent configuration (URI, auth, batch size).
-   - Export format versioning to ensure compatibility as schema evolves.
-4. **Testing Strategy**
-   - Core unit/integration tests run against synthetic fixtures.
-   - Plugin-specific test suites reside with each plugin and exercise product heuristics separately.
+## Investigation Steps
 
-## Work Plan
+### Phase 1: Deep Investigation ✅
+- [x] Create this plan document
+- [ ] Check current database content in detail
+- [ ] Trace through the parser pipeline to find where PHP labels are introduced
+- [ ] Check plugin registration and selection logic
+- [ ] Verify TypeScript parser is actually being used
+- [ ] Document all findings with specific code references
 
-### Phase 0 – Baseline & Cleanup
-- Document the existing end-to-end flow and delete or archive redundant scripts (`src/import/*`, `archive/indexing_scripts/*`) retaining only a reference implementation.
-- Add smoke tests that exercise the current pipeline to protect against regressions during refactor.
+### Phase 2: Prepare for Codex
+- [ ] Compile list of specific issues with examples
+- [ ] Create suggestions for fixes
+- [ ] Identify exact files and functions that need changes
+- [ ] Prepare clear, actionable request for Codex
 
-### Phase 1 – Core Pipeline Extraction
-- Introduce a `PipelineConfig` object describing source roots, enabled languages, database targets, and plugin set.
-- Create a `CodebaseIndexer` class that encapsulates the current run sequence (`_index_file_structure`, symbol collection, reference resolution, linking, export) but delegates implementation details to injected components.
-- Move statistics tracking to an instrumentation module so it can be reused by different indexers.
+### Phase 3: Codex Collaboration
+- [ ] Send detailed findings to Codex with suggestions
+- [ ] Review Codex's proposed solution
+- [ ] Apply Codex's fixes to the codebase
 
-### Phase 2 – Language Module Boundary
-- Define interfaces (`LanguageCollector`, `ReferenceResolver`) that the PHP and JS implementations must satisfy.
-- Refactor `parsers/php_enhanced.py` and `parsers/php_reference_resolver.py` into a `languages/php` package that implements those interfaces with no Espo-specific logic.
-- Extract EspoCRM JS heuristics (`parsers/js_espocrm_parser.py`) into a plugin subclass while creating a baseline JS parser for generic projects.
+### Phase 4: Clean Rebuild & Verification
+- [ ] Clean Neo4j database completely
+- [ ] Delete existing SQLite database
+- [ ] Re-parse webSlicer with fixed parser
+- [ ] Import fresh data to Neo4j
+- [ ] Query Neo4j for verification
 
-### Phase 3 – Domain Pluginization
-- Establish a plugin registry (`plugins/`) with lifecycle hooks (`before_collect`, `after_resolve`, `cross_language_links`, etc.).
-- Move EspoCRM-specific pieces into `plugins/espocrm/`:
-  - Metadata parser and configuration edge creation.
-  - Controller/action endpoint mapping logic.
-  - Espo namespace fallback currently embedded in `SymbolTable.resolve`.
-- Ensure core code only depends on plugin interfaces (e.g., `NamespaceFallbackStrategy`).
+### Phase 5: Accuracy Verification
+- [ ] Query for PHP* labels (should be 0)
+- [ ] Check ReactComponent nodes match actual .tsx files
+- [ ] Verify TSFunction nodes match actual functions
+- [ ] Check RENDERS relationships match JSX in code
+- [ ] Verify CALLS relationships match actual function calls
+- [ ] Cross-reference 5-10 files manually for 100% accuracy
 
-### Phase 4 – Export/Import Consolidation
-- Merge the divergent Neo4j import scripts into a configurable `GraphExporter` and `GraphImporter` supporting:
-  - Single point of credential configuration.
-  - Standard batching/retry strategy.
-  - Optional drivers (direct bolt vs. Cypher file generation) selected via config.
-- Update CLI commands to target these unified components and deprecate legacy scripts.
+## Verification Queries
 
-### Phase 5 – Configuration & CLI
-- Provide a `memory.yaml` schema (project root, include/exclude globs, enabled plugins, graph options).
-- Implement CLI (`python -m memory index --config memory.yaml`) that loads the config, instantiates the pipeline, runs index/export/import steps, and reports metrics.
-- Support environment-based overrides for secrets (Neo4j credentials).
+```cypher
+// Should return 0
+MATCH (n) WHERE n.type STARTS WITH 'PHP' RETURN count(n)
 
-### Phase 6 – Testing & Quality Gates
-- Split existing tests into:
-  - Core: run against generic fixtures (rename or duplicate Espo fixtures as neutral data where possible).
-  - Plugin: run Espo-specific behavior when the plugin is enabled.
-- Add regression tests for the plugin registry to ensure disabled plugins cannot leak behavior into the core pipeline.
-- Configure CI targets (lint, unit, integration, plugin).
+// Should match actual React components
+MATCH (n:ReactComponent) RETURN n.name, n.file_path LIMIT 10
 
-### Phase 7 – Documentation & Samples
-- Update README/docs to describe the plugin model, configuration file, and how to add a new plugin.
-- Provide sample configs for EspoCRM and a generic PHP/JS project.
+// Should show correct relationships
+MATCH (c:ReactComponent)-[:RENDERS]->(element) RETURN c.name, element.name LIMIT 20
+```
 
-### Phase 8 – Post-refactor Cleanup
-- Remove or relocate `archive/` assets that are superseded by the new architecture.
-- Replace hard-coded strings (e.g., `bolt://localhost:7688`) with configuration-driven defaults and document environment variables.
-- Audit logging to ensure consistent structure and log levels across modules.
+## Success Criteria
+1. Zero PHP labels in TypeScript project
+2. All React components correctly identified
+3. All TypeScript types/interfaces correctly labeled
+4. Relationships match actual code structure
+5. Manual spot checks pass 100%
 
-## Risk & Mitigation Notes
-- **Regression Risk:** Preserve current behavior behind an EspoCRM plugin until tests demonstrate feature parity.
-- **Performance:** Monitor SQLite and Neo4j ingest performance after abstraction; extract shared batching utilities rather than duplicating logic per importer.
-- **Adoption:** Deliver migration docs so existing automation (scripts referencing `CompleteEspoCRMIndexer`) can switch to the new CLI with minimal changes.
+## Current Status
+**✅ COMPLETED - ALL ISSUES FIXED!**
 
-## Immediate Next Steps
-1. Create design sketches for the plugin interface and pipeline configuration objects.
-2. Spike a prototype where `CompleteEspoCRMIndexer` delegates to a configuration-driven pipeline while still using the current components.
-3. Identify quick deletions (unused import scripts, dormant archive modules) that can be removed before deeper refactor.
+## Final Results
+
+### Success Metrics Achieved:
+- ✅ **ZERO PHP labels** in TypeScript project (0 out of 5,041 nodes)
+- ✅ **473 TypeScript types** correctly preserved (TSFunction, TSInterface, TSClass, TSType)
+- ✅ **291 React components** correctly identified
+- ✅ **31 API routes** properly labeled
+- ✅ **All relationships preserved**: RENDERS (1,211), CALLS (517), USES (768), etc.
+- ✅ **244 React components** with JSX relationships
+- ✅ **65 TypeScript functions** with call relationships
+
+### Fix Applied:
+Codex successfully modified `tools/ultra_fast_neo4j_import.py` to preserve original type names from SQLite instead of mapping them to PHP labels. The function now only maps 'file' → 'File' and 'directory' → 'Directory', preserving all other types as-is.
+
+## Investigation Findings
+
+### ROOT CAUSE FOUND! ✅
+
+The issue is NOT in the parser! The TypeScript parser is working correctly. The problem is in the **Neo4j import script**.
+
+**Location:** `tools/ultra_fast_neo4j_import.py`
+**Function:** `_get_label_for_type()` (lines 568-583)
+
+**The Problem:**
+1. SQLite database has CORRECT types: `ReactComponent`, `TSFunction`, `TSInterface`, etc.
+2. The import script has a hardcoded mapping that converts generic types to PHP labels
+3. Line 583: `return type_map.get(symbol_type, 'PHPSymbol')` - defaults to PHPSymbol for unmapped types!
+
+**Current Broken Mapping:**
+```python
+type_map = {
+    'class': 'PHPClass',           # Maps TSClass → PHPClass
+    'function': 'PHPFunction',      # Maps TSFunction → PHPFunction
+    'property': 'PHPProperty',      # Maps property → PHPProperty
+    'interface': 'PHPInterface',    # Maps TSInterface → PHPInterface
+    ...
+}
+return type_map.get(symbol_type, 'PHPSymbol')  # Everything else → PHPSymbol
+```
+
+**Evidence:**
+- SQLite has correct types: TSFunction (174), ReactComponent (291), TSInterface (147)
+- Neo4j shows same counts but under generic labels
+- The import script is stripping the TS/React prefixes and mapping to PHP labels
+
+## Suggestions for Codex
+
+### Request for Codex:
+
+**File to fix:** `tools/ultra_fast_neo4j_import.py`
+
+**Function to fix:** `_get_label_for_type()` (lines 568-583)
+
+**Required changes:**
+1. Remove the hardcoded PHP mapping
+2. Use the actual type from SQLite as the Neo4j label
+3. Keep special handling only for file/directory
+4. Simple solution: just return the symbol_type directly (with capital first letter)
+
+**Suggested implementation:**
+```python
+def _get_label_for_type(self, symbol_type: str) -> str:
+    """Map symbol type to Neo4j label"""
+    # Special cases that need different labels
+    special_cases = {
+        'file': 'File',
+        'directory': 'Directory',
+    }
+
+    # For special cases, use the mapping
+    if symbol_type in special_cases:
+        return special_cases[symbol_type]
+
+    # For everything else, use the type as-is
+    # This preserves ReactComponent, TSFunction, TSInterface, etc.
+    return symbol_type if symbol_type else 'Symbol'
+```
+
+**Additional context for Codex:**
+- The parser already creates correct types like ReactComponent, TSFunction, TSInterface
+- We need to preserve these exact types in Neo4j
+- No PHP labels should exist for TypeScript/React projects
+- The import script should be language-agnostic

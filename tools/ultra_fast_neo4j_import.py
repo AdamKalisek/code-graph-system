@@ -566,21 +566,17 @@ class UltraFastNeo4jImporter:
                             f"  Worker {worker_id}: Failed batch for {rel_type}: {e}")
 
     def _get_label_for_type(self, symbol_type: str) -> str:
-        """Map symbol type to Neo4j label"""
-        type_map = {
-            'class': 'PHPClass',
-            'interface': 'PHPInterface',
-            'trait': 'PHPTrait',
-            'method': 'PHPMethod',
-            'function': 'PHPFunction',
-            'property': 'PHPProperty',
-            'constant': 'PHPConstant',
-            'namespace': 'PHPNamespace',
-            'file': 'File',
-            'directory': 'Directory',
-            'module': 'JSModule'
-        }
-        return type_map.get(symbol_type, 'PHPSymbol')
+        """Map symbol type to Neo4j label while preserving SQLite types."""
+        if not symbol_type:
+            return 'Symbol'
+
+        normalized = symbol_type.lower()
+        if normalized == 'file':
+            return 'File'
+        if normalized == 'directory':
+            return 'Directory'
+
+        return symbol_type
 
     async def _clear_database_async(self, session):
         """Clear database in batches"""
