@@ -12,7 +12,7 @@ import json
 import sqlite3
 import hashlib
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 
 # Add parent directory to path for imports
@@ -20,11 +20,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # Backend parsers
 from src.core.symbol_table import SymbolTable, Symbol, SymbolType
+from src.pipeline import PipelineConfig, load_pipeline_config, CodebaseIndexer
+from src.pipeline.indexer import JavaScriptLanguageModule
+from src.plugins import create_registry
+from src.plugins.espocrm import EspoApiScanner
+from src.tools import ensure_database_ready, wipe_database, GraphExporter, GraphImporter
 from parsers.php_enhanced import PHPSymbolCollector
 from parsers.php_reference_resolver import PHPReferenceResolver
 
 # Frontend parser
-from parsers.js_espocrm_parser import EspoCRMJavaScriptParser
+from parsers.js_parser import JavaScriptParser
 
 # Metadata parser for EspoCRM JSON configurations
 from parsers.metadata_parser import MetadataParser
@@ -38,11 +43,26 @@ logger = logging.getLogger(__name__)
 class CompleteEspoCRMIndexer:
     """Complete indexer for entire EspoCRM codebase"""
     
-    def __init__(self, db_path: str):
+    def __init__(
+        self,
+        db_path: str,
+        project_path: Path | str = "espocrm",
+        config: Optional[PipelineConfig] = None,
+    ):
         self.db_path = db_path
-        self.project_path = Path('espocrm')  # Always process EspoCRM
+        self.project_path = Path(project_path).resolve()
+        self.config = config
+
+        if not self.project_path.exists():
+            logger.warning(
+                "Project path %s does not exist. Indexing may fail.",
+                self.project_path,
+            )
+
         self.symbol_table = SymbolTable(db_path)
-        self.js_parser = EspoCRMJavaScriptParser()
+        self.codebase_indexer: Optional[CodebaseIndexer] = None
+        self.plugin_registry = None
+        self.js_parser = JavaScriptParser()
         
         # Statistics
         self.stats = {
@@ -60,6 +80,24 @@ class CompleteEspoCRMIndexer:
         # Track API endpoints for cross-language linking
         self.php_endpoints = {}  # controller::method -> symbol_id
         self.js_api_calls = []   # List of JS API call symbols
+
+        if self.config:
+            config_sqlite = str(self.config.storage.sqlite_path.resolve())
+            current_sqlite = str(Path(db_path).resolve())
+            if config_sqlite != current_sqlite:
+                logger.debug(
+                    "Config SQLite path %s differs from CLI db %s; using CLI path.",
+                    config_sqlite,
+                    current_sqlite,
+                )
+                self.config.storage.sqlite_path = Path(current_sqlite)
+
+            self.plugin_registry = create_registry(self.config)
+            self.codebase_indexer = CodebaseIndexer(
+                self.config,
+                symbol_table_override=self.symbol_table,
+                plugin_registry=self.plugin_registry,
+            )
         
     def run(self):
         """Run complete indexing"""
@@ -68,31 +106,40 @@ class CompleteEspoCRMIndexer:
         logger.info("="*70)
         logger.info("COMPLETE ESPOCRM INDEXING - BACKEND + FRONTEND")
         logger.info("="*70)
+
+        if self.codebase_indexer:
+            logger.info("\n[CONFIG] Running configuration-driven pipeline...")
+            base_stats = self.codebase_indexer.run()
+            self.stats.update(base_stats)
+            self._capture_js_api_calls_from_modules()
+            self._collect_php_endpoints()
+            self._link_symbols_to_files()
+        else:
+            # Step 0: Index File Structure (FUNDAMENTAL!)
+            logger.info("\n[1/6] INDEXING FILE STRUCTURE...")
+            self._index_file_structure()
+
+            # Step 1: Index PHP Backend
+            logger.info("\n[2/6] INDEXING PHP BACKEND...")
+            self._index_php_backend()
+
+            # Step 2: Index JavaScript Frontend
+            logger.info("\n[3/6] INDEXING JAVASCRIPT FRONTEND...")
+            self._index_javascript_frontend()
         
-        # Step 0: Index File Structure (FUNDAMENTAL!)
-        logger.info("\n[1/6] INDEXING FILE STRUCTURE...")
-        self._index_file_structure()
-        
-        # Step 1: Index PHP Backend
-        logger.info("\n[2/6] INDEXING PHP BACKEND...")
-        self._index_php_backend()
-        
-        # Step 2: Index JavaScript Frontend
-        logger.info("\n[3/6] INDEXING JAVASCRIPT FRONTEND...")
-        self._index_javascript_frontend()
-        
-        # Step 3: Parse EspoCRM Metadata JSON configurations
-        logger.info("\n[4/7] PARSING ESPOCRM METADATA CONFIGURATIONS...")
-        self._parse_metadata_configurations()
-        
-        # Step 4: Create Cross-Language Links
-        logger.info("\n[5/7] CREATING CROSS-LANGUAGE LINKS...")
-        self._create_cross_language_links()
-        
+        if not self.codebase_indexer:
+            # Step 3: Parse EspoCRM Metadata JSON configurations
+            logger.info("\n[4/7] PARSING ESPOCRM METADATA CONFIGURATIONS...")
+            self._parse_metadata_configurations()
+
+            # Step 4: Create Cross-Language Links
+            logger.info("\n[5/7] CREATING CROSS-LANGUAGE LINKS...")
+            self._create_cross_language_links()
+
         # Step 5: Export to Neo4j
         logger.info("\n[6/7] EXPORTING TO NEO4J...")
         self._export_to_neo4j()
-        
+
         # Step 6: Generate Statistics
         logger.info("\n[7/7] GENERATING STATISTICS...")
         self.stats['total_time'] = time.time() - start_time
@@ -119,12 +166,12 @@ class CompleteEspoCRMIndexer:
             
             # Create directory node
             dir_id = f"dir_{hashlib.md5(str(root_path).encode()).hexdigest()}"
-            
+
             if str(root_path) not in seen_dirs:
                 dir_sym = Symbol(
                     id=dir_id,
                     name=root_path.name if root_path.name else str(self.project_path),
-                    type=SymbolType.FILE,  # Using FILE type for directories too
+                    type=SymbolType.DIRECTORY,
                     file_path=str(root_path),
                     line_number=0,
                     column_number=0,
@@ -278,12 +325,6 @@ class CompleteEspoCRMIndexer:
                         'variable': SymbolType.VARIABLE,
                         'import': SymbolType.IMPORT,
                         'constant': SymbolType.CONSTANT,
-                        'api_call': SymbolType.FUNCTION,  # API calls are function calls
-                        'event_handler': SymbolType.METHOD,  # Event handlers are methods
-                        'template': SymbolType.FILE,  # Templates are like files
-                        'backbone_model': SymbolType.CLASS,
-                        'backbone_view': SymbolType.CLASS,
-                        'backbone_collection': SymbolType.CLASS,
                     }
                     
                     symbol_type = type_mapping.get(symbol.type, SymbolType.VARIABLE)
@@ -302,18 +343,6 @@ class CompleteEspoCRMIndexer:
                     )
                     self.symbol_table.add_symbol(sym)
                     
-                    # Track API calls for cross-language linking
-                    if symbol.type == 'api_call':
-                        self.js_api_calls.append({
-                            'symbol_id': symbol_id,
-                            'endpoint': symbol.metadata.get('endpoint'),
-                            'method': symbol.metadata.get('method'),
-                            'php_controller': symbol.metadata.get('php_controller'),
-                            'php_method': symbol.metadata.get('php_method'),
-                            'file': str(file_path),
-                            'line': symbol.line
-                        })
-                
                 # Store JS references
                 for ref in references:
                     self.symbol_table.add_reference(
@@ -331,6 +360,8 @@ class CompleteEspoCRMIndexer:
             except Exception as e:
                 logger.error(f"Error parsing JS file {file_path}: {e}")
         
+        scanner = EspoApiScanner(self.symbol_table, self.project_path)
+        self.js_api_calls = scanner.scan(js_files)
         self.stats['js_symbols'] = total_js_symbols
         self.stats['js_references'] = total_js_references
         
@@ -384,6 +415,16 @@ class CompleteEspoCRMIndexer:
         
         conn.close()
         logger.info(f"Collected {len(self.php_endpoints)} PHP endpoints")
+
+    def _capture_js_api_calls_from_modules(self) -> None:
+        """Pull JS API call metadata from the configuration-driven module run."""
+        if not self.codebase_indexer:
+            return
+
+        for module in self.codebase_indexer.modules:
+            if isinstance(module, JavaScriptLanguageModule):
+                self.js_api_calls = [dict(call) for call in module.api_calls]
+                break
     
     def _create_cross_language_links(self):
         """Create links between JavaScript API calls and PHP endpoints"""
@@ -517,102 +558,96 @@ class CompleteEspoCRMIndexer:
     def _export_to_neo4j(self):
         """Export complete graph to Neo4j"""
         logger.info("Preparing Neo4j export...")
-        
-        # Connect to database
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        # Get all symbols
-        symbols = cursor.execute("SELECT * FROM symbols").fetchall()
-        references = cursor.execute("SELECT * FROM symbol_references").fetchall()
-        
-        logger.info(f"Exporting {len(symbols)} symbols and {len(references)} references to Neo4j")
-        
-        # Create Cypher export file
-        with open('espocrm_complete.cypher', 'w') as f:
-            # Clear database
-            f.write("MATCH (n) DETACH DELETE n;\n\n")
-            
-            # Create indexes
-            f.write("CREATE INDEX symbol_id IF NOT EXISTS FOR (s:Symbol) ON (s.id);\n")
-            f.write("CREATE INDEX file_id IF NOT EXISTS FOR (f:File) ON (f.id);\n")
-            f.write("CREATE INDEX dir_id IF NOT EXISTS FOR (d:Directory) ON (d.id);\n")
-            f.write("CREATE INDEX php_class IF NOT EXISTS FOR (c:PHPClass) ON (c.name);\n")
-            f.write("CREATE INDEX js_module IF NOT EXISTS FOR (m:JSModule) ON (m.name);\n\n")
-            
-            # Create nodes
-            for symbol in symbols:
-                # Determine node label based on ID prefix and type
-                symbol_id = symbol['id']
-                symbol_type = symbol['type']
-                
-                # File and Directory nodes
-                if symbol_id.startswith('dir_'):
-                    label = 'Directory'
-                elif symbol_id.startswith('file_'):
-                    label = 'File'
-                # JavaScript symbols
-                elif symbol_id.startswith('js_'):
-                    label = 'JSSymbol'
-                    if 'class' in symbol_type or 'backbone' in symbol_type:
-                        label = 'JSModule'
-                    elif 'api_call' in symbol_type:
-                        label = 'APICall'
-                # PHP symbols
-                else:
-                    label = 'PHPSymbol'
-                    if symbol_type == 'class':
-                        label = 'PHPClass'
-                    elif symbol_type == 'method':
-                        label = 'PHPMethod'
-                
-                props = {
-                    'id': symbol['id'],
-                    'name': symbol['name'],
-                    'type': symbol_type
-                }
-                
-                # Add optional properties
-                try:
-                    if symbol['file_path']:
-                        props['file'] = symbol['file_path']
-                except (KeyError, IndexError):
-                    pass
-                try:
-                    if symbol['line_number']:
-                        props['line'] = symbol['line_number']
-                except (KeyError, IndexError):
-                    pass
-                try:
-                    if symbol['namespace']:
-                        props['namespace'] = symbol['namespace']
-                except (KeyError, IndexError):
-                    pass
-                
-                # Format properties for Cypher (not JSON)
-                props_str = self._format_cypher_props(props)
-                f.write(f"CREATE (n:{label} {props_str});\n")
-            
-            f.write("\n// Creating relationships\n")
-            
-            # Create relationships
-            for ref in references:
-                rel_type = ref['reference_type'].replace('-', '_').upper()
-                f.write(f"MATCH (s {{id: '{ref['source_id']}'}}), ")
-                f.write(f"(t {{id: '{ref['target_id']}'}}) ")
-                f.write(f"CREATE (s)-[:{rel_type}]->(t);\n")
-        
-        conn.close()
-        
-        logger.info("Created espocrm_complete.cypher - Import this into Neo4j for visualization")
-        
-        # Try to import using MCP if available
-        try:
-            self._import_to_neo4j_mcp(symbols, references)
-        except Exception as e:
-            logger.info(f"Could not import via MCP: {e}")
-            logger.info("Please run: cat espocrm_complete.cypher | cypher-shell")
+
+        if self.config:
+            output_path = self.config.extras.get('cypher_output')
+            if output_path:
+                output_file = Path(output_path)
+            else:
+                output_file = Path('data') / f"{self.config.project.name}_graph.cypher"
+
+            exporter = GraphExporter(self.config, output_file)
+            stats = exporter.export_cypher()
+            logger.info("Cypher export written to %s (%s symbols, %s references)", output_file, stats.get('symbols'), stats.get('references'))
+
+            if self.config.extras.get('auto_import', False):
+                importer = GraphImporter(
+                    self.config.neo4j,
+                    self.config.storage.sqlite_path,
+                    clear_first=self.config.neo4j.wipe_before_import,
+                )
+                import_stats = importer.run()
+                logger.info(
+                    "Imported graph into Neo4j: %s nodes, %s relationships (failed %s)",
+                    import_stats['nodes_created'],
+                    import_stats['relationships_created'],
+                    import_stats['failed_relationships'],
+                )
+        else:
+            # Legacy fallback: replicate previous export behaviour
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            symbols = cursor.execute("SELECT * FROM symbols").fetchall()
+            references = cursor.execute("SELECT * FROM symbol_references").fetchall()
+
+            with open('espocrm_complete.cypher', 'w') as f:
+                f.write("MATCH (n) DETACH DELETE n;\n\n")
+
+                for symbol in symbols:
+                    symbol_id = symbol['id']
+                    symbol_type = symbol['type']
+                    if symbol_id.startswith('dir_'):
+                        label = 'Directory'
+                    elif symbol_id.startswith('file_'):
+                        label = 'File'
+                    elif symbol_id.startswith('js_'):
+                        label = 'JSSymbol'
+                        if 'class' in symbol_type or 'backbone' in symbol_type:
+                            label = 'JSModule'
+                        elif 'api_call' in symbol_type:
+                            label = 'APICall'
+                    else:
+                        label = 'PHPSymbol'
+                        if symbol_type == 'class':
+                            label = 'PHPClass'
+                        elif symbol_type == 'method':
+                            label = 'PHPMethod'
+
+                    props = {
+                        'id': symbol['id'],
+                        'name': symbol['name'],
+                        'type': symbol_type
+                    }
+                    try:
+                        if symbol['file_path']:
+                            props['file'] = symbol['file_path']
+                    except (KeyError, IndexError):
+                        pass
+                    try:
+                        if symbol['line_number']:
+                            props['line'] = symbol['line_number']
+                    except (KeyError, IndexError):
+                        pass
+                    try:
+                        if symbol['namespace']:
+                            props['namespace'] = symbol['namespace']
+                    except (KeyError, IndexError):
+                        pass
+
+                    props_str = self._format_cypher_props(props)
+                    f.write(f"CREATE (n:{label} {props_str});\n")
+
+                f.write("\n// Creating relationships\n")
+                for ref in references:
+                    rel_type = ref['reference_type'].replace('-', '_').upper()
+                    f.write(f"MATCH (s {{id: '{ref['source_id']}'}}), ")
+                    f.write(f"(t {{id: '{ref['target_id']}'}}) ")
+                    f.write(f"CREATE (s)-[:{rel_type}]->(t);\n")
+
+            conn.close()
+            logger.info("Created espocrm_complete.cypher - Import this into Neo4j for visualization")
     
     def _import_to_neo4j_mcp(self, symbols, references):
         """Try to import using Neo4j MCP"""
@@ -682,17 +717,53 @@ class CompleteEspoCRMIndexer:
 
 def main():
     parser = argparse.ArgumentParser(description='Complete EspoCRM Indexer')
-    parser.add_argument('--db', default='data/espocrm_complete.db', help='Database path')
+    parser.add_argument('--db', help='SQLite database path for symbol table output')
+    parser.add_argument('--config', help='Path to pipeline configuration file (YAML/JSON)')
+    parser.add_argument('--project-root', help='Override project root directory')
     parser.add_argument('--verbose', action='store_true', help='Verbose output')
-    
+
     args = parser.parse_args()
-    
+
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
-    
-    indexer = CompleteEspoCRMIndexer(args.db)
+
+    pipeline_config: Optional[PipelineConfig] = None
+    if args.config:
+        pipeline_config = load_pipeline_config(args.config)
+
+    if pipeline_config and args.verbose:
+        logger.debug("Loaded pipeline config: %s", pipeline_config.to_dict())
+
+    db_path = args.db
+    if not db_path and pipeline_config:
+        db_path = str(pipeline_config.storage.sqlite_path)
+    if not db_path:
+        db_path = 'data/espocrm_complete.db'
+
+    db_parent = Path(db_path).expanduser().resolve().parent
+    db_parent.mkdir(parents=True, exist_ok=True)
+
+    project_root = args.project_root
+    if not project_root and pipeline_config:
+        project_root = str(pipeline_config.project.root)
+    if not project_root:
+        project_root = 'espocrm'
+
+    if pipeline_config:
+        ensure_database_ready(pipeline_config.neo4j)
+        if pipeline_config.neo4j.wipe_before_import:
+            try:
+                wipe_database(pipeline_config.neo4j)
+            except RuntimeError as exc:
+                logger.error("Failed to wipe Neo4j database: %s", exc)
+
+    indexer = CompleteEspoCRMIndexer(
+        db_path,
+        project_path=project_root,
+        config=pipeline_config,
+    )
     stats = indexer.run()
-    
+
     return 0
 
 if __name__ == "__main__":

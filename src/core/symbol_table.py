@@ -24,10 +24,18 @@ class SymbolType(Enum):
     CONSTANT = "constant"
     NAMESPACE = "namespace"
     FILE = "file"
+    DIRECTORY = "directory"
     VARIABLE = "variable"
     PARAMETER = "parameter"
     IMPORT = "import"
     TYPE_ALIAS = "type_alias"
+    TS_CLASS = "TSClass"
+    TS_INTERFACE = "TSInterface"
+    TS_TYPE = "TSType"
+    TS_FUNCTION = "TSFunction"
+    REACT_COMPONENT = "ReactComponent"
+    API_ROUTE = "APIRoute"
+    JSX_ELEMENT = "JSXElement"
 
 
 @dataclass

@@ -30,6 +30,7 @@ tmp/
 
 # Neo4j
 neo4j-data/
+neo4j_backup*/
 
 # Test outputs
 test_tokens.php
@@ -48,3 +49,17 @@ archive.tar.gz
 .cache/
 *.cache
 *.tmp
+
+# Code analysis folder
+code_to_analyze/
+code_to_anlayze/
+
+# SQLite database files and data folder
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
