@@ -11,23 +11,27 @@
 ## 🚀 Quick Start
 
 ```bash
-# 1. Install dependencies
+# 1. Place code to analyze
+# Put the codebase you want to analyze in: code_to_anlayze/
+# Example: code_to_anlayze/your-project/
+
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# 2. Start Neo4j
+# 3. Start Neo4j
 docker run -d \
   --name neo4j-code \
   -p 7474:7474 -p 7688:7687 \
   -e NEO4J_AUTH=neo4j/password \
   neo4j:latest
 
-# 3. Parse your codebase
+# 4. Parse your codebase
 python src/indexer/main.py --config your-project.yaml
 
-# 4. Import to Neo4j
+# 5. Import to Neo4j
 python tools/ultra_fast_neo4j_import.py --config your-project.yaml --bolt-parallel
 
-# 5. Query your code
+# 6. Query your code
 # Open http://localhost:7474 and run:
 MATCH (c:ReactComponent)-[:RENDERS]->(e) RETURN c, e LIMIT 50
 ```
