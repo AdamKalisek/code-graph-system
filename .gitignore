@@ -52,7 +52,7 @@ archive.tar.gz
 
 # Code analysis folder
 code_to_analyze/
-code_to_anlayze/
+code_to_anlayze/*
 
 # SQLite database files and data folder
 data/
