@@ -12,8 +12,8 @@
 
 ```bash
 # 1. Place code to analyze
-# Put the codebase you want to analyze in: code_to_anlayze/
-# Example: code_to_anlayze/your-project/
+# Put the codebase you want to analyze in: code_to_analyze/
+# Example: code_to_analyze/your-project/
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -95,8 +95,53 @@ RETURN c.name, deps ORDER BY deps DESC
 - [Architecture Overview](docs/ARCHITECTURE.md)
 - [Data Model Reference](docs/DATA_MODEL.md)
 - [Configuration Guide](docs/CONFIGURATION.md)
-- [Adding New Languages](docs/EXTENDING.md)
-- [Performance Tuning](docs/PERFORMANCE.md)
+- [Query Examples](docs/QUERYING.md)
+
+## 🔧 Troubleshooting
+
+### Neo4j Connection Refused
+```bash
+# Make sure Neo4j is running
+docker ps | grep neo4j-code
+
+# If not running, start it
+make neo4j-start
+# or
+docker start neo4j-code
+```
+
+### No Symbols Parsed
+- **Check languages match files:** Verify `languages:` in your YAML config includes the correct types
+- **Check file paths:** Ensure `root:` points to correct directory
+- **Check logs:** Run with `--verbose` flag to see parsing errors
+
+### Import Fails
+**Error: "Authentication failed"**
+- Check Neo4j credentials in config match your setup (default: neo4j/password)
+- Verify connection: `docker exec neo4j-code cypher-shell -u neo4j -p password`
+
+**Error: "Database not found"**
+- Check `database:` name in config matches your Neo4j database
+
+### Missing Dependencies
+```bash
+# If you see "ModuleNotFoundError: No module named 'tree_sitter'"
+pip install -r requirements.txt
+
+# Verify installation
+python -c "import tree_sitter; print('OK')"
+```
+
+### Slow Performance
+- Use `--admin-export` instead of `--bolt-parallel` for large codebases (>10k files)
+- Increase `parallel_workers` in config
+- Exclude test files: add to config `ignore_patterns: ["*.test.*", "*.spec.*"]`
+
+### Wrong Node Types (PHP labels in TypeScript project)
+This was a known bug, fixed in commit from PLAN.md. If you still see it:
+- Update to latest version
+- Check parser is correctly identified for your language
+- Verify import script is `tools/ultra_fast_neo4j_import.py` (not deprecated scripts)
 
 ## 🤝 Contributing
 

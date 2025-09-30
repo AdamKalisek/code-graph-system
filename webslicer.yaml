@@ -1,6 +1,6 @@
 project:
   name: webslicer
-  root: code_to_anlayze/webSlicer
+  root: code_to_analyze/webSlicer
   languages:
     - typescript
 storage:

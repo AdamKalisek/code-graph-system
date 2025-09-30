@@ -1,6 +1,6 @@
 project:
   name: espocrm
-  root: code_to_anlayze/espocrm
+  root: code_to_analyze/espocrm
   languages:
     - php
     - javascript
