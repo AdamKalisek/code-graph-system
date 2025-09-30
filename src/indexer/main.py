@@ -15,6 +15,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from collections import defaultdict
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    # Fallback if tqdm not installed
+    def tqdm(iterable, **kwargs):
+        return iterable
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -243,10 +250,8 @@ class CompleteEspoCRMIndexer:
         # Pass 1: Symbol Collection
         logger.info("Pass 1: Collecting PHP symbols...")
         collector = PHPSymbolCollector(self.symbol_table)
-        
-        for i, file_path in enumerate(php_files, 1):
-            if i % 100 == 0:
-                logger.info(f"  Processing {i}/{len(php_files)}: {file_path.name}")
+
+        for file_path in tqdm(php_files, desc="Parsing PHP files", unit="file"):
             try:
                 collector.parse_file(str(file_path))
             except Exception as e:
@@ -255,10 +260,8 @@ class CompleteEspoCRMIndexer:
         # Pass 2: Reference Resolution
         logger.info("Pass 2: Resolving PHP references...")
         resolver = PHPReferenceResolver(self.symbol_table)
-        
-        for i, file_path in enumerate(php_files, 1):
-            if i % 100 == 0:
-                logger.info(f"  Resolving {i}/{len(php_files)}: {file_path.name}")
+
+        for file_path in tqdm(php_files, desc="Resolving PHP references", unit="file"):
             try:
                 resolver.resolve_file(str(file_path))
             except Exception as e:
@@ -299,14 +302,11 @@ class CompleteEspoCRMIndexer:
         self.stats['js_files'] = len(js_files)
         
         logger.info(f"Found {len(js_files)} JavaScript files")
-        
+
         total_js_symbols = 0
         total_js_references = 0
-        
-        for i, file_path in enumerate(js_files, 1):
-            if i % 50 == 0:
-                logger.info(f"  Processing JS {i}/{len(js_files)}: {file_path.name}")
-            
+
+        for file_path in tqdm(js_files, desc="Parsing JavaScript files", unit="file"):
             try:
                 # Parse JavaScript file
                 symbols, references = self.js_parser.parse_file(str(file_path))
