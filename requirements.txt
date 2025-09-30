@@ -1,2 +1,14 @@
+# Core dependencies
 PyYAML>=6.0
 neo4j>=5.20
+
+# Parsing libraries
+tree-sitter>=0.20.0
+tree-sitter-php>=0.20.0
+tree-sitter-javascript>=0.20.0
+
+# Testing (optional but recommended)
+pytest>=7.0.0
+
+# Progress bars for long operations
+tqdm>=4.65.0
