@@ -1,0 +1,17 @@
+project:
+  name: mini-app
+  root: examples/mini-app
+  languages:
+    - typescript
+
+storage:
+  sqlite: data/mini-app.db
+
+neo4j:
+  uri: bolt://localhost:7688
+  username: neo4j
+  password: password
+  database: neo4j
+  wipe_before_import: false
+
+plugins: []
