@@ -22,6 +22,13 @@ from neo4j import AsyncGraphDatabase, GraphDatabase
 from neo4j.exceptions import TransientError, ClientError
 import argparse
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    # Fallback if tqdm not installed
+    def tqdm(iterable, **kwargs):
+        return iterable
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -283,7 +290,7 @@ class UltraFastNeo4jImporter:
 
         # Group by type for better performance
         nodes_by_type = {}
-        for symbol in all_symbols:
+        for symbol in tqdm(all_symbols, desc="Grouping symbols by type", unit="symbol", disable=len(all_symbols) < 100):
             symbol_type = symbol['type']
             if symbol_type not in nodes_by_type:
                 nodes_by_type[symbol_type] = []
