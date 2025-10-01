@@ -111,6 +111,8 @@ class CodebaseIndexer:
             yield PHPLanguageModule(self.project_root, self.symbol_table)
         if "javascript" in languages:
             yield JavaScriptLanguageModule(self.project_root, self.symbol_table)
+        if "python" in languages:
+            yield PythonLanguageModule(self.project_root, self.symbol_table)
 
     def _index_file_structure(self) -> None:
         logger.info("Indexing file structure under %s", self.project_root)
@@ -201,6 +203,7 @@ from typing import Tuple
 from parsers.php_enhanced import PHPSymbolCollector
 from parsers.php_reference_resolver import PHPReferenceResolver
 from parsers.js_parser import JavaScriptParser, JSSymbol, JSReference
+from parsers.python_parser import PythonParser, PySymbol, PyReference
 
 
 def os_walk(root: Path):  # pragma: no cover - passthrough helper for testability
@@ -347,3 +350,90 @@ class JavaScriptLanguageModule:
             'constant': SymbolType.CONSTANT,
         }
         return mapping.get(js_type, SymbolType.VARIABLE)
+
+
+@dataclass
+class PythonLanguageModule:
+    """Python language support"""
+    project_root: Path
+    symbol_table: SymbolTable
+    name: str = "python"
+    _stats: Dict[str, int] = field(default_factory=dict)
+    parser: PythonParser = field(default_factory=PythonParser)
+    processed_files: List[Path] = field(default_factory=list)
+
+    def collect(self) -> None:
+        """Collect Python symbols"""
+        py_files = self._discover_files()
+        self._stats["python_files"] = len(py_files)
+
+        total_symbols = 0
+        total_references = 0
+        self.processed_files = list(py_files)
+
+        for idx, file_path in enumerate(py_files, 1):
+            try:
+                symbols, references = self.parser.parse_file(str(file_path))
+            except Exception as exc:  # pragma: no cover - passthrough logging
+                logger.debug("Python parse failed for %s: %s", file_path, exc)
+                continue
+
+            for symbol in symbols:
+                symbol_id = f"py_{symbol.id}"
+                sym = Symbol(
+                    id=symbol_id,
+                    name=symbol.name,
+                    type=self._map_symbol_type(symbol.type),
+                    file_path=str(file_path),
+                    line_number=symbol.line,
+                    column_number=symbol.column,
+                    namespace=None,
+                    parent_id=None,
+                    metadata={"python_type": symbol.type, "python_metadata": symbol.metadata},
+                )
+                self.symbol_table.add_symbol(sym)
+
+            for ref in references:
+                self.symbol_table.add_reference(
+                    source_id=f"py_{ref.source_id}" if not ref.source_id.startswith('py_') else ref.source_id,
+                    target_id=f"py_{ref.target_id}" if not ref.target_id.startswith('py_') else ref.target_id,
+                    reference_type=ref.type,
+                    line=ref.line,
+                    column=ref.column,
+                    context=ref.context,
+                )
+
+            total_symbols += len(symbols)
+            total_references += len(references)
+
+            if idx % 100 == 0:
+                logger.debug("Processed Python symbols for %s/%s files", idx, len(py_files))
+
+        self.symbol_table.conn.commit()
+        self._stats["python_symbols"] = total_symbols
+        self._stats["python_references"] = total_references
+
+    def resolve(self) -> None:
+        """Python module resolves relationships during collection"""
+        return None
+
+    def stats(self) -> Dict[str, int]:
+        return dict(self._stats)
+
+    def _discover_files(self) -> List[Path]:
+        """Find all Python files in project"""
+        files = list(self.project_root.rglob("*.py"))
+        # Filter out common directories
+        return [f for f in files if not any(part in f.parts for part in ["__pycache__", "venv", "env", ".venv", "node_modules", "vendor"])]
+
+    def _map_symbol_type(self, py_type: str) -> SymbolType:
+        """Map Python symbol types to SymbolType enum"""
+        mapping = {
+            'class': SymbolType.CLASS,
+            'function': SymbolType.FUNCTION,
+            'method': SymbolType.METHOD,
+            'property': SymbolType.PROPERTY,
+            'variable': SymbolType.VARIABLE,
+            'import': SymbolType.IMPORT,
+        }
+        return mapping.get(py_type, SymbolType.VARIABLE)
