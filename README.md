@@ -48,7 +48,7 @@ MATCH (c:ReactComponent)-[:RENDERS]->(e) RETURN c, e LIMIT 50
 - ✅ TypeScript/TSX (React, Next.js)
 - ✅ JavaScript/JSX
 - ✅ PHP (EspoCRM optimized)
-- 🚧 Python (coming soon)
+- ✅ Python
 - 🚧 Java (coming soon)
 
 ## 🏗️ Architecture

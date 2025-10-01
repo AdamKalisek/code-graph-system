@@ -71,6 +71,7 @@ Source Code → Tree-sitter Parser → SQLite Staging → Neo4j Import → Cyphe
 - **TypeScript/React:** `typescript.py` - Extracts components, hooks, JSX relationships
 - **JavaScript:** Uses `parsers/js_parser.py` with Babel parser
 - **PHP:** Uses `parsers/php_enhanced.py` with Tree-sitter
+- **Python:** Uses `parsers/python_parser.py` with Tree-sitter
 - **Extensible:** Add new languages by implementing language module interface
 
 #### 3. Symbol Table (`src/core/symbol_table.py`)
@@ -98,6 +99,7 @@ Three optimization strategies:
 - `PHPClass`, `PHPMethod`, `PHPFunction` - PHP symbols
 - `ReactComponent`, `TSFunction`, `TSInterface` - TypeScript/React symbols
 - `JSModule`, `APICall` - JavaScript symbols
+- `PythonClass`, `PythonFunction`, `PythonMethod` - Python symbols
 
 **Relationship Types:**
 - `CONTAINS` - Directory→File, File→Symbol
@@ -121,6 +123,7 @@ project:
     - typescript
     - javascript
     - php
+    - python
 
 storage:
   sqlite: data/my-project.db
@@ -207,6 +210,7 @@ code-graph-system/
 ├── parsers/                # Language-specific parsers
 │   ├── js_parser.py       # JavaScript/Babel parser
 │   ├── php_enhanced.py    # PHP Tree-sitter parser
+│   ├── python_parser.py   # Python Tree-sitter parser
 │   └── metadata_parser.py # EspoCRM JSON metadata
 ├── src/
 │   ├── core/              # Symbol table, resolution
