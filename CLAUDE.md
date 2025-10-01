@@ -12,8 +12,10 @@ Code Graph System transforms source code into a queryable Neo4j knowledge graph 
 
 ### Setup & Prerequisites
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies (using uv)
+uv sync
+# Or with make:
+make install
 
 # Start Neo4j (required for imports)
 docker run -d \
@@ -21,6 +23,8 @@ docker run -d \
   -p 7474:7474 -p 7688:7687 \
   -e NEO4J_AUTH=neo4j/password \
   neo4j:latest
+# Or with make:
+make neo4j-start
 ```
 
 ### Core Workflow
@@ -29,10 +33,14 @@ docker run -d \
 #    Example: code_to_analyze/your-project/
 
 # 2. Parse codebase (creates SQLite staging database)
-python src/indexer/main.py --config your-project.yaml
+uv run python src/indexer/main.py --config your-project.yaml
+# Or with make:
+make parse CONFIG=your-project.yaml
 
 # 3. Import to Neo4j (multiple strategies available)
-python tools/ultra_fast_neo4j_import.py --config your-project.yaml --bolt-parallel
+uv run python tools/ultra_fast_neo4j_import.py --config your-project.yaml --bolt-parallel
+# Or with make:
+make import CONFIG=your-project.yaml
 
 # 4. Query graph at http://localhost:7474
 # Example: MATCH (c:ReactComponent)-[:RENDERS]->(e) RETURN c, e LIMIT 50

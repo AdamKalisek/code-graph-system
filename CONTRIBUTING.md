@@ -8,7 +8,11 @@ Thanks for your interest in contributing! This guide will help you get started.
 # 1. Clone and install
 git clone https://github.com/yourusername/code-graph-system.git
 cd code-graph-system
+
+# Install dependencies with uv (fast Python package manager)
 make install
+# Or directly:
+uv sync
 
 # 2. Start Neo4j for testing
 make neo4j-start
@@ -25,15 +29,22 @@ make import CONFIG=examples/mini-app.yaml
 
 ### Prerequisites
 - Python 3.8+
+- [uv](https://docs.astral.sh/uv/) - Fast Python package manager (install with `curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - Docker (for Neo4j)
 - Git
 
 ### Install Development Dependencies
 ```bash
-pip install -r requirements.txt
+# Install all dependencies including dev tools
+make install-dev
+# Or directly:
+uv sync --extra dev
 
-# Optional: Install development tools
-pip install black ruff pytest-cov
+# This installs:
+# - All project dependencies
+# - pytest, pytest-cov (testing)
+# - black (code formatting)
+# - ruff (linting)
 ```
 
 ## Project Structure
@@ -182,16 +193,20 @@ Update `docs/CONFIGURATION.md` with plugin options.
 ### Running Tests
 ```bash
 # All tests
-pytest tests/
+make test
+# Or directly:
+uv run pytest tests/
 
 # Specific test file
-pytest tests/test_parser.py
+uv run pytest tests/test_parser.py
 
 # With verbose output
-pytest tests/ -v
+uv run pytest tests/ -v
 
 # With coverage
-pytest tests/ --cov=src --cov-report=term-missing
+make test-coverage
+# Or directly:
+uv run pytest tests/ --cov=src --cov-report=term-missing
 ```
 
 ### Writing Tests
@@ -238,10 +253,19 @@ def parse_file(file_path: str) -> Tuple[List[Symbol], List[Reference]]:
 ### Formatting
 ```bash
 # Format code with black
-black src/ tests/
+make format
+# Or directly:
+uv run black src/ tests/ parsers/
 
 # Lint with ruff
-ruff check src/ tests/
+make lint
+# Or directly:
+uv run ruff check src/ tests/ parsers/
+
+# Type check
+make typecheck
+# Or directly:
+uv run mypy src/
 ```
 
 ## Debugging Tips

@@ -15,8 +15,10 @@
 # Put the codebase you want to analyze in: code_to_analyze/
 # Example: code_to_analyze/your-project/
 
-# 2. Install dependencies
-pip install -r requirements.txt
+# 2. Install dependencies (using uv - fast Python package manager)
+uv sync
+# Or with make:
+make install
 
 # 3. Start Neo4j
 docker run -d \

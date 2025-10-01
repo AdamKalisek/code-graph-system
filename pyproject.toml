@@ -1,0 +1,97 @@
+[project]
+name = "code-graph-system"
+version = "1.0.0"
+description = "Transform source code into a queryable Neo4j knowledge graph"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Code Graph System Contributors"}
+]
+keywords = ["code-analysis", "neo4j", "graph-database", "ast-parser", "tree-sitter"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # Core dependencies
+    "pyyaml>=6.0",
+    "neo4j>=5.20",
+
+    # Parsing libraries
+    "tree-sitter>=0.20.0",
+    "tree-sitter-php>=0.20.0",
+    "tree-sitter-javascript>=0.20.0",
+    "tree-sitter-python>=0.20.0",
+
+    # Progress bars for long operations
+    "tqdm>=4.65.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/AdamKalisek/code-graph-system"
+Repository = "https://github.com/AdamKalisek/code-graph-system"
+Issues = "https://github.com/AdamKalisek/code-graph-system/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src", "parsers"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow-running tests",
+    "requires_neo4j: Tests that require Neo4j running",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.venv
+  | venv
+  | build
+  | dist
+  | node_modules
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]  # Line too long (handled by black)
+extend-exclude = ["node_modules", "vendor", "build", "dist"]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py

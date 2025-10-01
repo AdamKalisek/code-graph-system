@@ -5,11 +5,15 @@ help:
 	@echo "Code Graph System - Development Commands"
 	@echo ""
 	@echo "Setup:"
-	@echo "  make install        Install Python dependencies"
+	@echo "  make install        Install Python dependencies with uv"
+	@echo "  make install-dev    Install with dev dependencies"
+	@echo "  make update         Update all dependencies"
 	@echo "  make neo4j-start    Start Neo4j Docker container"
 	@echo ""
 	@echo "Development:"
 	@echo "  make test           Run all tests"
+	@echo "  make lint           Lint code with ruff"
+	@echo "  make format         Format code with black"
 	@echo "  make parse          Parse codebase (requires CONFIG=path/to/config.yaml)"
 	@echo "  make import         Import to Neo4j (requires CONFIG=path/to/config.yaml)"
 	@echo "  make clean          Clean SQLite databases"
@@ -26,22 +30,35 @@ help:
 	@echo "  make import CONFIG=memory.yaml"
 	@echo "  make query"
 
-# Install Python dependencies
+# Install Python dependencies with uv
 install:
-	@echo "Installing dependencies..."
-	pip install -r requirements.txt
+	@echo "Installing dependencies with uv..."
+	uv sync
 	@echo "✅ Dependencies installed"
+
+# Install with development dependencies
+install-dev:
+	@echo "Installing dependencies with dev tools..."
+	uv sync --extra dev
+	@echo "✅ Dev dependencies installed"
+
+# Update dependencies
+update:
+	@echo "Updating dependencies..."
+	uv lock --upgrade
+	uv sync
+	@echo "✅ Dependencies updated"
 
 # Run tests
 test:
 	@echo "Running tests..."
-	pytest tests/ -v
+	uv run pytest tests/ -v
 	@echo "✅ Tests complete"
 
 # Run tests with coverage
 test-coverage:
 	@echo "Running tests with coverage..."
-	pytest tests/ -v --cov=src --cov-report=term-missing
+	uv run pytest tests/ -v --cov=src --cov-report=term-missing
 	@echo "✅ Tests complete with coverage report"
 
 # Clean generated files
@@ -61,7 +78,7 @@ ifndef CONFIG
 	@exit 1
 endif
 	@echo "Parsing codebase with config: $(CONFIG)"
-	python src/indexer/main.py --config $(CONFIG)
+	uv run python src/indexer/main.py --config $(CONFIG)
 	@echo "✅ Parsing complete"
 
 # Import to Neo4j (requires CONFIG variable)
@@ -72,7 +89,7 @@ ifndef CONFIG
 	@exit 1
 endif
 	@echo "Importing to Neo4j with config: $(CONFIG)"
-	python tools/ultra_fast_neo4j_import.py --config $(CONFIG) --bolt-parallel
+	uv run python tools/ultra_fast_neo4j_import.py --config $(CONFIG) --bolt-parallel
 	@echo "✅ Import complete"
 
 # Full pipeline: parse + import
@@ -123,14 +140,17 @@ query:
 	 command -v xdg-open > /dev/null && xdg-open http://localhost:7474 || \
 	 echo "Please open http://localhost:7474 in your browser"
 
-# Lint code (if you add linting tools later)
+# Lint code
 lint:
 	@echo "Linting code..."
-	@command -v ruff > /dev/null && ruff check src/ tests/ || \
-	 echo "⚠️  ruff not installed. Run: pip install ruff"
+	uv run ruff check src/ tests/ parsers/
 
-# Format code (if you add formatting tools later)
+# Format code
 format:
 	@echo "Formatting code..."
-	@command -v black > /dev/null && black src/ tests/ || \
-	 echo "⚠️  black not installed. Run: pip install black"
+	uv run black src/ tests/ parsers/
+
+# Type check
+typecheck:
+	@echo "Type checking..."
+	uv run mypy src/ --ignore-missing-imports || echo "⚠️  mypy not installed"
