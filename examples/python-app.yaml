@@ -1,0 +1,17 @@
+project:
+  name: python-app
+  root: examples/python-app
+  languages:
+    - python
+
+storage:
+  sqlite: data/python-app.db
+
+neo4j:
+  uri: bolt://localhost:7688
+  username: neo4j
+  password: password
+  database: neo4j
+  wipe_before_import: false
+
+plugins: []
